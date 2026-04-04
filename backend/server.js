@@ -1,10 +1,11 @@
-// v5 - Kick OAuth 2.1 con PKCE
+// v6 - Kick OAuth 2.1 + Stripe pagamenti
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const mongoose = require('mongoose');
 const axios = require('axios');
 const crypto = require('crypto');
+const Stripe = require('stripe');
 
 dotenv.config();
 
@@ -15,6 +16,47 @@ const KICK_CLIENT_ID = process.env.KICK_CLIENT_ID;
 const KICK_CLIENT_SECRET = process.env.KICK_CLIENT_SECRET;
 const KICK_REDIRECT_URI = process.env.KICK_REDIRECT_URI || 'https://kick-loyalty-app.vercel.app/auth/callback';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://kick-loyalty-app.vercel.app';
+
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID;
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
+
+// Webhook Stripe deve essere PRIMA di express.json()
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('Webhook error:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const userId = session.metadata?.userId;
+    if (userId && mongoose.connection.readyState === 1) {
+      await User.findByIdAndUpdate(userId, {
+        plan: 'pro',
+        stripeCustomerId: session.customer,
+        stripeSubscriptionId: session.subscription
+      });
+      console.log('✅ Piano Pro attivato per utente:', userId);
+    }
+  }
+
+  if (event.type === 'customer.subscription.deleted') {
+    const subscription = event.data.object;
+    if (mongoose.connection.readyState === 1) {
+      await User.findOneAndUpdate(
+        { stripeSubscriptionId: subscription.id },
+        { plan: 'free', stripeSubscriptionId: null }
+      );
+    }
+  }
+
+  res.json({ received: true });
+});
 
 // Middleware
 app.use(cors({ origin: '*', credentials: false }));
@@ -40,6 +82,9 @@ const userSchema = new mongoose.Schema({
   kickChannelId: { type: String },
   kickAccessToken: { type: String },
   kickRefreshToken: { type: String },
+  plan: { type: String, default: 'free' },
+  stripeCustomerId: { type: String },
+  stripeSubscriptionId: { type: String },
   createdAt: { type: Date, default: Date.now },
   lastLogin: { type: Date, default: Date.now }
 });
@@ -63,7 +108,6 @@ let mockRewards = [
   { id: '3', name: 'Custom Emote', description: 'Emote personalizzata', points: 1000, type: 'emote', active: true }
 ];
 
-// Sessioni OAuth temporanee in memoria
 global.oauthSessions = {};
 
 // ==================== ROUTES ====================
@@ -78,10 +122,7 @@ app.get('/api/auth/kick/url', (req, res) => {
   const codeVerifier = crypto.randomBytes(32).toString('base64url');
   const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
 
-  // Salva codeVerifier associato allo state
   global.oauthSessions[state] = codeVerifier;
-
-  // Pulisci sessioni vecchie (> 10 minuti)
   setTimeout(() => { delete global.oauthSessions[state]; }, 10 * 60 * 1000);
 
   const scopes = ['user:read', 'channel:read'].join(' ');
@@ -102,11 +143,8 @@ app.post('/api/auth/kick/callback', async (req, res) => {
   const { code, state } = req.body;
   if (!code) return res.status(400).json({ error: 'Code mancante' });
 
-  // Recupera codeVerifier dallo state
   const codeVerifier = global.oauthSessions[state];
-  if (!codeVerifier) {
-    console.warn('codeVerifier non trovato per state:', state);
-  }
+  if (!codeVerifier) console.warn('codeVerifier non trovato per state:', state);
 
   try {
     const params = new URLSearchParams();
@@ -122,17 +160,12 @@ app.post('/api/auth/kick/callback', async (req, res) => {
     });
 
     const { access_token, refresh_token } = tokenResponse.data;
-
-    // Pulisci sessione
     if (state) delete global.oauthSessions[state];
 
     const userResponse = await axios.get('https://api.kick.com/public/v1/users', {
       headers: { 'Authorization': `Bearer ${access_token}` }
     });
 
-    console.log('Kick user response:', JSON.stringify(userResponse.data));
-
-    // Gestisce diverse strutture di risposta
     const userData = userResponse.data?.data?.[0] || userResponse.data?.data || userResponse.data;
     const username = userData?.username || userData?.name || userData?.email || 'user_' + Date.now();
     const displayName = userData?.name || userData?.username || username;
@@ -155,11 +188,7 @@ app.post('/api/auth/kick/callback', async (req, res) => {
         { upsert: true, new: true }
       );
     } else {
-      user = {
-        _id: 'mock_' + username,
-        kickUsername: username.toLowerCase(),
-        kickDisplayName: displayName
-      };
+      user = { _id: 'mock_' + username, kickUsername: username.toLowerCase(), kickDisplayName: displayName, plan: 'free' };
     }
 
     res.json({
@@ -169,12 +198,12 @@ app.post('/api/auth/kick/callback', async (req, res) => {
         username: user.kickUsername,
         displayName: user.kickDisplayName,
         avatarUrl: user.kickAvatarUrl,
-        channelId: user.kickChannelId
+        channelId: user.kickChannelId,
+        plan: user.plan || 'free'
       }
     });
   } catch (error) {
     console.error('OAuth error:', error.response?.data || error.message);
-    console.error('OAuth error details:', JSON.stringify(error.response?.data));
     res.status(500).json({ error: 'Errore OAuth Kick', details: error.response?.data });
   }
 });
@@ -188,8 +217,7 @@ app.post('/api/auth/login', async (req, res) => {
     let kickData = null;
     try {
       const kickResponse = await axios.get(`https://kick.com/api/v1/channels/${username}`, {
-        timeout: 5000,
-        headers: { 'User-Agent': 'Mozilla/5.0' }
+        timeout: 5000, headers: { 'User-Agent': 'Mozilla/5.0' }
       });
       kickData = kickResponse.data;
     } catch (e) { console.log('Kick API non disponibile'); }
@@ -207,7 +235,7 @@ app.post('/api/auth/login', async (req, res) => {
         { upsert: true, new: true }
       );
     } else {
-      user = { _id: 'mock_' + username, kickUsername: username.toLowerCase(), kickDisplayName: username };
+      user = { _id: 'mock_' + username, kickUsername: username.toLowerCase(), kickDisplayName: username, plan: 'free' };
     }
 
     res.json({
@@ -216,7 +244,8 @@ app.post('/api/auth/login', async (req, res) => {
         id: user._id,
         username: user.kickUsername,
         displayName: user.kickDisplayName || username,
-        avatarUrl: user.kickAvatarUrl
+        avatarUrl: user.kickAvatarUrl,
+        plan: user.plan || 'free'
       }
     });
   } catch (error) {
@@ -224,19 +253,53 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// Rewards - GET
+// ==================== STRIPE ====================
+
+// Crea sessione checkout per piano Pro
+app.post('/api/stripe/create-checkout', async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: 'userId richiesto' });
+
+  try {
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+      mode: 'subscription',
+      success_url: `${FRONTEND_URL}?upgrade=success`,
+      cancel_url: `${FRONTEND_URL}?upgrade=cancelled`,
+      metadata: { userId }
+    });
+    res.json({ url: session.url });
+  } catch (error) {
+    console.error('Stripe error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Cancella abbonamento
+app.post('/api/stripe/cancel', async (req, res) => {
+  const { userId } = req.body;
+  try {
+    const user = await User.findById(userId);
+    if (!user?.stripeSubscriptionId) return res.status(400).json({ error: 'Nessun abbonamento attivo' });
+    await stripe.subscriptions.cancel(user.stripeSubscriptionId);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== REWARDS ====================
+
 app.get('/api/rewards', async (req, res) => {
   try {
     if (mongoose.connection.readyState === 1) {
       const rewards = await Reward.find(req.query.userId ? { userId: req.query.userId } : {}).sort({ createdAt: -1 });
       res.json(rewards);
-    } else {
-      res.json(mockRewards);
-    }
+    } else { res.json(mockRewards); }
   } catch (error) { res.json(mockRewards); }
 });
 
-// Rewards - POST
 app.post('/api/rewards', async (req, res) => {
   try {
     if (mongoose.connection.readyState === 1) {
@@ -251,7 +314,6 @@ app.post('/api/rewards', async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// Rewards - DELETE
 app.delete('/api/rewards/:id', async (req, res) => {
   try {
     if (mongoose.connection.readyState === 1) {
@@ -263,7 +325,6 @@ app.delete('/api/rewards/:id', async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// Stats
 app.get('/api/stats', (req, res) => {
   res.json({ totalViewers: 1247, activeMembers: 342, totalPoints: 45678, rewardsRedeemed: 89 });
 });

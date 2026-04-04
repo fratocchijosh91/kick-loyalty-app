@@ -11,12 +11,24 @@ function App() {
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(false)
   const [kickUsername, setKickUsername] = useState('')
+  const [upgradeLoading, setUpgradeLoading] = useState(false)
+  const [upgradeMessage, setUpgradeMessage] = useState('')
 
-  // Gestisce callback OAuth Kick
+  // Gestisce callback OAuth Kick e risultato upgrade
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search)
     const code = urlParams.get('code')
     const state = urlParams.get('state')
+    const upgrade = urlParams.get('upgrade')
+
+    if (upgrade === 'success') {
+      setUpgradeMessage('🎉 Piano Pro attivato! Benvenuto nel club!')
+      window.history.replaceState({}, document.title, '/')
+    } else if (upgrade === 'cancelled') {
+      setUpgradeMessage('❌ Upgrade annullato.')
+      window.history.replaceState({}, document.title, '/')
+    }
+
     if (code) {
       setLoading(true)
       axios.post(`${API_URL}/auth/kick/callback`, { code, state })
@@ -37,7 +49,6 @@ function App() {
   // Login
   const handleLogin = async () => {
     if (!kickUsername.trim()) {
-      // OAuth reale Kick
       try {
         setLoading(true)
         const response = await axios.get(`${API_URL}/auth/kick/url`)
@@ -50,7 +61,6 @@ function App() {
       return
     }
 
-    // Login con username (fallback)
     setLoading(true)
     try {
       const response = await axios.post(`${API_URL}/auth/login`, {
@@ -64,6 +74,20 @@ function App() {
       alert('Errore durante il login')
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Upgrade a Pro con Stripe
+  const handleUpgrade = async () => {
+    if (!user?.id) return alert('Devi essere loggato!')
+    setUpgradeLoading(true)
+    try {
+      const response = await axios.post(`${API_URL}/stripe/create-checkout`, { userId: user.id })
+      window.location.href = response.data.url
+    } catch (error) {
+      alert('Errore durante il checkout: ' + error.message)
+    } finally {
+      setUpgradeLoading(false)
     }
   }
 
@@ -81,7 +105,6 @@ function App() {
     }
   }
 
-  // Create reward
   const createReward = async (rewardData) => {
     try {
       const response = await axios.post(`${API_URL}/rewards`, rewardData)
@@ -92,7 +115,6 @@ function App() {
     }
   }
 
-  // Delete reward
   const deleteReward = async (id) => {
     if (!confirm('Sei sicuro di voler eliminare questo reward?')) return
     try {
@@ -104,14 +126,46 @@ function App() {
     }
   }
 
-  // Logout
   const handleLogout = () => {
     setUser(null)
     setCurrentPage('login')
   }
 
+  const isPro = user?.plan === 'pro'
+
+  // Navbar condivisa
+  const Navbar = () => (
+    <nav className="navbar">
+      <div className="navbar-brand"><h1>🎮 Kick Loyalty</h1></div>
+      <div className="navbar-menu">
+        <button className={currentPage === 'dashboard' ? 'active' : ''} onClick={() => setCurrentPage('dashboard')}>📊 Dashboard</button>
+        <button className={currentPage === 'analytics' ? 'active' : ''} onClick={() => setCurrentPage('analytics')}>📈 Analytics</button>
+        <button className={currentPage === 'pricing' ? 'active' : ''} onClick={() => setCurrentPage('pricing')}>💎 Pricing</button>
+      </div>
+      <div className="navbar-user">
+        {user?.avatarUrl && <img src={user.avatarUrl} alt={user.displayName} />}
+        <span>{user?.displayName || user?.username}</span>
+        {isPro && <span style={{ background: '#53FC58', color: '#000', borderRadius: '4px', padding: '2px 8px', fontSize: '11px', fontWeight: 700 }}>PRO</span>}
+        <button onClick={handleLogout} className="btn-logout">Logout</button>
+      </div>
+    </nav>
+  )
+
   return (
     <div className="app">
+      {/* Messaggio upgrade */}
+      {upgradeMessage && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+          background: upgradeMessage.includes('🎉') ? '#53FC58' : '#ff4444',
+          color: upgradeMessage.includes('🎉') ? '#000' : '#fff',
+          padding: '14px', textAlign: 'center', fontWeight: 700, fontSize: '16px'
+        }}>
+          {upgradeMessage}
+          <button onClick={() => setUpgradeMessage('')} style={{ marginLeft: '16px', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '16px' }}>✕</button>
+        </div>
+      )}
+
       {/* LOGIN PAGE */}
       {currentPage === 'login' && (
         <div className="login-page">
@@ -120,54 +174,28 @@ function App() {
               <h1>🎮 Kick Loyalty</h1>
               <p>Sistema di Rewards per il Tuo Stream</p>
             </div>
-            
             <div className="login-box">
               <h2>Accedi alla Dashboard</h2>
-              <p className="login-description">
-                Gestisci rewards, punti e fidelizza la tua community
-              </p>
-              
+              <p className="login-description">Gestisci rewards, punti e fidelizza la tua community</p>
               <input
                 type="text"
-                className="kick-username-input"
                 placeholder="Il tuo username Kick... (opzionale)"
                 value={kickUsername}
                 onChange={(e) => setKickUsername(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
                 style={{
-                  width: '100%',
-                  padding: '12px 16px',
-                  marginBottom: '12px',
-                  borderRadius: '8px',
-                  border: '2px solid #333',
-                  background: '#1a1a1a',
-                  color: '#fff',
-                  fontSize: '16px',
-                  outline: 'none',
-                  boxSizing: 'border-box'
+                  width: '100%', padding: '12px 16px', marginBottom: '12px',
+                  borderRadius: '8px', border: '2px solid #333', background: '#1a1a1a',
+                  color: '#fff', fontSize: '16px', outline: 'none', boxSizing: 'border-box'
                 }}
               />
-              <button
-                className="btn-kick-login"
-                onClick={handleLogin}
-                disabled={loading}
-              >
+              <button className="btn-kick-login" onClick={handleLogin} disabled={loading}>
                 {loading ? '⏳ Caricamento...' : kickUsername ? '🚀 Entra con username' : '🟢 Login con Kick'}
               </button>
-              
               <div className="login-features">
-                <div className="feature">
-                  <span className="feature-icon">⭐</span>
-                  <span>Rewards Personalizzati</span>
-                </div>
-                <div className="feature">
-                  <span className="feature-icon">📊</span>
-                  <span>Analytics in Real-time</span>
-                </div>
-                <div className="feature">
-                  <span className="feature-icon">🎁</span>
-                  <span>Sistema Punti Automatico</span>
-                </div>
+                <div className="feature"><span className="feature-icon">⭐</span><span>Rewards Personalizzati</span></div>
+                <div className="feature"><span className="feature-icon">📊</span><span>Analytics in Real-time</span></div>
+                <div className="feature"><span className="feature-icon">🎁</span><span>Sistema Punti Automatico</span></div>
               </div>
             </div>
           </div>
@@ -177,88 +205,57 @@ function App() {
       {/* DASHBOARD */}
       {currentPage === 'dashboard' && user && (
         <div className="dashboard">
-          <nav className="navbar">
-            <div className="navbar-brand">
-              <h1>🎮 Kick Loyalty</h1>
-            </div>
-            <div className="navbar-menu">
-              <button 
-                className={currentPage === 'dashboard' ? 'active' : ''}
-                onClick={() => setCurrentPage('dashboard')}
+          <Navbar />
+
+          {/* Banner upgrade se free */}
+          {!isPro && (
+            <div style={{
+              background: 'linear-gradient(135deg, #1a1a2e, #16213e)',
+              border: '1px solid rgba(83,252,88,0.3)',
+              borderRadius: '12px', margin: '20px', padding: '16px 24px',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+            }}>
+              <div>
+                <strong style={{ color: '#53FC58', fontSize: '16px' }}>🚀 Passa a KickLoyalty Pro</strong>
+                <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', marginTop: '4px' }}>
+                  Rewards illimitati, analytics avanzate, priority support — €19/mese
+                </p>
+              </div>
+              <button
+                onClick={handleUpgrade}
+                disabled={upgradeLoading}
+                style={{
+                  background: '#53FC58', color: '#000', border: 'none', borderRadius: '8px',
+                  padding: '10px 24px', fontWeight: 700, fontSize: '14px', cursor: 'pointer',
+                  whiteSpace: 'nowrap'
+                }}
               >
-                📊 Dashboard
-              </button>
-              <button 
-                className={currentPage === 'analytics' ? 'active' : ''}
-                onClick={() => setCurrentPage('analytics')}
-              >
-                📈 Analytics
-              </button>
-              <button 
-                className={currentPage === 'pricing' ? 'active' : ''}
-                onClick={() => setCurrentPage('pricing')}
-              >
-                💎 Pricing
+                {upgradeLoading ? '⏳...' : '💎 Upgrade a Pro'}
               </button>
             </div>
-            <div className="navbar-user">
-              {user.avatarUrl && <img src={user.avatarUrl} alt={user.displayName} />}
-              <span>{user.displayName || user.username}</span>
-              <button onClick={handleLogout} className="btn-logout">Logout</button>
-            </div>
-          </nav>
+          )}
 
           {stats && (
             <div className="stats-grid">
-              <div className="stat-card">
-                <div className="stat-icon">👥</div>
-                <div className="stat-info">
-                  <h3>{stats.totalViewers.toLocaleString()}</h3>
-                  <p>Total Viewers</p>
-                </div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-icon">⭐</div>
-                <div className="stat-info">
-                  <h3>{stats.activeMembers.toLocaleString()}</h3>
-                  <p>Active Members</p>
-                </div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-icon">🎯</div>
-                <div className="stat-info">
-                  <h3>{stats.totalPoints.toLocaleString()}</h3>
-                  <p>Total Points</p>
-                </div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-icon">🎁</div>
-                <div className="stat-info">
-                  <h3>{stats.rewardsRedeemed}</h3>
-                  <p>Rewards Redeemed</p>
-                </div>
-              </div>
+              <div className="stat-card"><div className="stat-icon">👥</div><div className="stat-info"><h3>{stats.totalViewers.toLocaleString()}</h3><p>Total Viewers</p></div></div>
+              <div className="stat-card"><div className="stat-icon">⭐</div><div className="stat-info"><h3>{stats.activeMembers.toLocaleString()}</h3><p>Active Members</p></div></div>
+              <div className="stat-card"><div className="stat-icon">🎯</div><div className="stat-info"><h3>{stats.totalPoints.toLocaleString()}</h3><p>Total Points</p></div></div>
+              <div className="stat-card"><div className="stat-icon">🎁</div><div className="stat-info"><h3>{stats.rewardsRedeemed}</h3><p>Rewards Redeemed</p></div></div>
             </div>
           )}
 
           <div className="rewards-section">
             <div className="section-header">
               <h2>🎁 Gestione Rewards</h2>
-              <button 
-                className="btn-primary"
-                onClick={() => {
-                  const name = prompt('Nome reward:')
-                  const description = prompt('Descrizione:')
-                  const points = prompt('Punti richiesti:')
-                  if (name && description && points) {
-                    createReward({ name, description, points: parseInt(points), type: 'custom', active: true })
-                  }
-                }}
-              >
-                + Nuovo Reward
-              </button>
+              <button className="btn-primary" onClick={() => {
+                const name = prompt('Nome reward:')
+                const description = prompt('Descrizione:')
+                const points = prompt('Punti richiesti:')
+                if (name && description && points) {
+                  createReward({ name, description, points: parseInt(points), type: 'custom', active: true })
+                }
+              }}>+ Nuovo Reward</button>
             </div>
-
             <div className="rewards-grid">
               {rewards.map(reward => (
                 <div key={reward.id || reward._id} className="reward-card">
@@ -274,12 +271,7 @@ function App() {
                       <span className="points-value">{reward.points}</span>
                       <span className="points-label">punti</span>
                     </div>
-                    <button 
-                      className="btn-delete"
-                      onClick={() => deleteReward(reward.id || reward._id)}
-                    >
-                      🗑️ Elimina
-                    </button>
+                    <button className="btn-delete" onClick={() => deleteReward(reward.id || reward._id)}>🗑️ Elimina</button>
                   </div>
                 </div>
               ))}
@@ -291,19 +283,7 @@ function App() {
       {/* ANALYTICS PAGE */}
       {currentPage === 'analytics' && user && (
         <div className="dashboard">
-          <nav className="navbar">
-            <div className="navbar-brand"><h1>🎮 Kick Loyalty</h1></div>
-            <div className="navbar-menu">
-              <button onClick={() => setCurrentPage('dashboard')}>📊 Dashboard</button>
-              <button className="active">📈 Analytics</button>
-              <button onClick={() => setCurrentPage('pricing')}>💎 Pricing</button>
-            </div>
-            <div className="navbar-user">
-              {user.avatarUrl && <img src={user.avatarUrl} alt={user.displayName} />}
-              <span>{user.displayName || user.username}</span>
-              <button onClick={handleLogout} className="btn-logout">Logout</button>
-            </div>
-          </nav>
+          <Navbar />
           <div className="analytics-page">
             <h2>📈 Analytics Dashboard</h2>
             <p>Statistiche e metriche del tuo sistema loyalty</p>
@@ -333,19 +313,7 @@ function App() {
       {/* PRICING PAGE */}
       {currentPage === 'pricing' && user && (
         <div className="dashboard">
-          <nav className="navbar">
-            <div className="navbar-brand"><h1>🎮 Kick Loyalty</h1></div>
-            <div className="navbar-menu">
-              <button onClick={() => setCurrentPage('dashboard')}>📊 Dashboard</button>
-              <button onClick={() => setCurrentPage('analytics')}>📈 Analytics</button>
-              <button className="active">💎 Pricing</button>
-            </div>
-            <div className="navbar-user">
-              {user.avatarUrl && <img src={user.avatarUrl} alt={user.displayName} />}
-              <span>{user.displayName || user.username}</span>
-              <button onClick={handleLogout} className="btn-logout">Logout</button>
-            </div>
-          </nav>
+          <Navbar />
           <div className="pricing-page">
             <h2>💎 Scegli il Tuo Piano</h2>
             <p>Trova il piano perfetto per la tua community</p>
@@ -359,7 +327,9 @@ function App() {
                   <li>✅ Analytics base</li>
                   <li>✅ Support email</li>
                 </ul>
-                <button className="btn-plan">Piano Attuale</button>
+                <button className="btn-plan" disabled={!isPro}>
+                  {!isPro ? '✅ Piano Attuale' : 'Downgrade'}
+                </button>
               </div>
               <div className="pricing-card pricing-card-featured">
                 <div className="badge-popular">🔥 PIÙ POPOLARE</div>
@@ -375,7 +345,13 @@ function App() {
                   <li>✅ Integrazioni custom</li>
                   <li>✅ Priority support</li>
                 </ul>
-                <button className="btn-plan btn-plan-featured">Upgrade a Pro</button>
+                <button
+                  className="btn-plan btn-plan-featured"
+                  onClick={!isPro ? handleUpgrade : undefined}
+                  disabled={upgradeLoading || isPro}
+                >
+                  {isPro ? '✅ Piano Attuale' : upgradeLoading ? '⏳...' : '💳 Upgrade a Pro'}
+                </button>
               </div>
               <div className="pricing-card">
                 <h3>⚡ Enterprise</h3>
@@ -387,7 +363,7 @@ function App() {
                   <li>✅ Onboarding personale</li>
                   <li>✅ 24/7 support</li>
                 </ul>
-                <button className="btn-plan">Contattaci</button>
+                <button className="btn-plan" onClick={() => window.open('mailto:info@kickloyalty.com')}>Contattaci</button>
               </div>
             </div>
           </div>
