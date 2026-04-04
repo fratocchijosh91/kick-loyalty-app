@@ -325,8 +325,66 @@ app.delete('/api/rewards/:id', async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-app.get('/api/stats', (req, res) => {
-  res.json({ totalViewers: 1247, activeMembers: 342, totalPoints: 45678, rewardsRedeemed: 89 });
+app.get('/api/stats', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState === 1) {
+      const [totalUsers, totalRewards, pointsAgg, redeemedAgg] = await Promise.all([
+        User.countDocuments(),
+        Reward.countDocuments({ active: true }),
+        User.aggregate([{ $group: { _id: null, total: { $sum: '$totalPoints' } } }]),
+        Reward.aggregate([{ $group: { _id: null, total: { $sum: '$redeemedCount' } } }])
+      ]);
+      res.json({
+        totalViewers: totalUsers,
+        activeMembers: totalUsers,
+        totalPoints: pointsAgg[0]?.total || 0,
+        rewardsRedeemed: redeemedAgg[0]?.total || 0
+      });
+    } else {
+      res.json({ totalViewers: 0, activeMembers: 0, totalPoints: 0, rewardsRedeemed: 0 });
+    }
+  } catch (error) {
+    res.json({ totalViewers: 0, activeMembers: 0, totalPoints: 0, rewardsRedeemed: 0 });
+  }
+});
+
+app.get('/api/analytics', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState === 1) {
+      const [topRewards, recentUsers, totalRewards] = await Promise.all([
+        Reward.find().sort({ redeemedCount: -1 }).limit(5),
+        User.find().sort({ createdAt: -1 }).limit(10),
+        Reward.countDocuments()
+      ]);
+
+      // Punti per mese (ultimi 4 mesi)
+      const months = ['Gen', 'Feb', 'Mar', 'Apr', 'Mag', 'Giu', 'Lug', 'Ago', 'Set', 'Ott', 'Nov', 'Dic'];
+      const now = new Date();
+      const pointsByMonth = [];
+      for (let i = 3; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+        const count = await User.countDocuments({ createdAt: { $gte: d, $lt: end } });
+        pointsByMonth.push({ month: months[d.getMonth()], points: count * 100 });
+      }
+
+      res.json({
+        topRewards: topRewards.map(r => ({ name: r.name, count: r.redeemedCount || 0 })),
+        pointsByMonth,
+        totalRewards,
+        recentUsers: recentUsers.length
+      });
+    } else {
+      res.json({
+        topRewards: [],
+        pointsByMonth: [],
+        totalRewards: 0,
+        recentUsers: 0
+      });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 connectDB();
