@@ -1,4 +1,4 @@
-// v6 - Kick OAuth 2.1 + Stripe pagamenti
+// v7 - Socket.io notifiche real-time
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
@@ -6,10 +6,17 @@ const mongoose = require('mongoose');
 const axios = require('axios');
 const crypto = require('crypto');
 const Stripe = require('stripe');
+const http = require('http');
+const { Server } = require('socket.io');
 
 dotenv.config();
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: '*', methods: ['GET', 'POST'] }
+});
+
 const PORT = process.env.PORT || 5000;
 
 const KICK_CLIENT_ID = process.env.KICK_CLIENT_ID;
@@ -20,6 +27,24 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'https://kick-loyalty-app.verce
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID;
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
+
+// Socket.io - gestione connessioni
+io.on('connection', (socket) => {
+  console.log('🔌 Client connesso:', socket.id);
+
+  // Lo streamer si registra nella sua stanza
+  socket.on('join-streamer', (streamerUsername) => {
+    socket.join(`streamer:${streamerUsername.toLowerCase()}`);
+    console.log(`📺 Streamer ${streamerUsername} connesso alla sua stanza`);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('🔌 Client disconnesso:', socket.id);
+  });
+});
+
+// Rendi io disponibile alle route
+app.set('io', io);
 
 // Webhook Stripe deve essere PRIMA di express.json()
 app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
@@ -98,6 +123,7 @@ const rewardSchema = new mongoose.Schema({
   type: String,
   active: Boolean,
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  redeemedCount: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now }
 });
 const Reward = mongoose.models.Reward || mongoose.model('Reward', rewardSchema);
@@ -255,7 +281,6 @@ app.post('/api/auth/login', async (req, res) => {
 
 // ==================== STRIPE ====================
 
-// Crea sessione checkout per piano Pro
 app.post('/api/stripe/create-checkout', async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: 'userId richiesto' });
@@ -276,7 +301,6 @@ app.post('/api/stripe/create-checkout', async (req, res) => {
   }
 });
 
-// Cancella abbonamento
 app.post('/api/stripe/cancel', async (req, res) => {
   const { userId } = req.body;
   try {
@@ -313,14 +337,11 @@ app.post('/api/rewards', async (req, res) => {
     }
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
+
 app.put('/api/rewards/:id', async (req, res) => {
   try {
     if (mongoose.connection.readyState === 1) {
-      const reward = await Reward.findByIdAndUpdate(
-        req.params.id,
-        req.body,
-        { new: true }
-      );
+      const reward = await Reward.findByIdAndUpdate(req.params.id, req.body, { new: true });
       res.json(reward);
     } else {
       const idx = mockRewards.findIndex(r => r.id === req.params.id);
@@ -329,6 +350,7 @@ app.put('/api/rewards/:id', async (req, res) => {
     }
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
+
 app.delete('/api/rewards/:id', async (req, res) => {
   try {
     if (mongoose.connection.readyState === 1) {
@@ -339,6 +361,47 @@ app.delete('/api/rewards/:id', async (req, res) => {
     res.json({ success: true });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
+
+// ==================== REDEEM (con notifica real-time) ====================
+
+app.post('/api/rewards/:id/redeem', async (req, res) => {
+  const { viewerUsername, streamerUsername } = req.body;
+  const io = req.app.get('io');
+
+  try {
+    let reward;
+    if (mongoose.connection.readyState === 1) {
+      reward = await Reward.findByIdAndUpdate(
+        req.params.id,
+        { $inc: { redeemedCount: 1 } },
+        { new: true }
+      );
+    } else {
+      reward = mockRewards.find(r => r.id === req.params.id);
+    }
+
+    if (!reward) return res.status(404).json({ error: 'Reward non trovato' });
+
+    // Invia notifica real-time allo streamer
+    if (io && streamerUsername) {
+      const notification = {
+        type: 'redeem',
+        viewerUsername,
+        rewardName: reward.name,
+        rewardPoints: reward.points,
+        timestamp: new Date()
+      };
+      io.to(`streamer:${streamerUsername.toLowerCase()}`).emit('reward-redeemed', notification);
+      console.log(`🔔 Notifica inviata allo streamer ${streamerUsername}:`, notification);
+    }
+
+    res.json({ success: true, reward });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== STATS & ANALYTICS ====================
 
 app.get('/api/stats', async (req, res) => {
   try {
@@ -372,7 +435,6 @@ app.get('/api/analytics', async (req, res) => {
         Reward.countDocuments()
       ]);
 
-      // Punti per mese (ultimi 4 mesi)
       const months = ['Gen', 'Feb', 'Mar', 'Apr', 'Mag', 'Giu', 'Lug', 'Ago', 'Set', 'Ott', 'Nov', 'Dic'];
       const now = new Date();
       const pointsByMonth = [];
@@ -390,12 +452,7 @@ app.get('/api/analytics', async (req, res) => {
         recentUsers: recentUsers.length
       });
     } else {
-      res.json({
-        topRewards: [],
-        pointsByMonth: [],
-        totalRewards: 0,
-        recentUsers: 0
-      });
+      res.json({ topRewards: [], pointsByMonth: [], totalRewards: 0, recentUsers: 0 });
     }
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -403,7 +460,8 @@ app.get('/api/analytics', async (req, res) => {
 });
 
 connectDB();
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`📋 API disponibili su http://localhost:${PORT}/api/`);
+  console.log(`🔌 Socket.io attivo`);
 });
