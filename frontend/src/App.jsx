@@ -1,9 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import axios from 'axios'
-import { io } from 'socket.io-client'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
-const SOCKET_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace('/api', '')
 
 function App() {
   const [currentPage, setCurrentPage] = useState('login')
@@ -17,33 +15,13 @@ function App() {
   const [widgetCopied, setWidgetCopied] = useState(false)
   const [viewerUrlCopied, setViewerUrlCopied] = useState(false)
   const [analytics, setAnalytics] = useState(null)
+  const [notification, setNotification] = useState('')
   const [viewerUsername, setViewerUsername] = useState('')
   const [viewerStreamer, setViewerStreamer] = useState('')
   const [viewerData, setViewerData] = useState(null)
   const [viewerRewards, setViewerRewards] = useState([])
   const [viewerLoading, setViewerLoading] = useState(false)
   const [redeemMessage, setRedeemMessage] = useState('')
-  const [editingReward, setEditingReward] = useState(null)
-  const [editForm, setEditForm] = useState({ name: '', description: '', points: '', active: true })
-  const [notifications, setNotifications] = useState([])
-  const socketRef = useRef(null)
-
-  // Connetti Socket.io quando lo streamer fa login
-  useEffect(() => {
-    if (user?.username) {
-      socketRef.current = io(SOCKET_URL, { transports: ['websocket', 'polling'] })
-      socketRef.current.on('connect', () => {
-        socketRef.current.emit('join-streamer', user.username)
-      })
-      socketRef.current.on('reward-redeemed', (notification) => {
-        const id = Date.now()
-        setNotifications(prev => [...prev, { ...notification, id }])
-        setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 6000)
-        loadData()
-      })
-      return () => { socketRef.current?.disconnect() }
-    }
-  }, [user?.username])
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search)
@@ -77,6 +55,7 @@ function App() {
           window.history.replaceState({}, document.title, '/')
         })
         .catch(error => {
+          console.error('OAuth callback error:', error)
           alert('Errore login OAuth: ' + (error.response?.data?.details?.message || error.message))
         })
         .finally(() => setLoading(false))
@@ -122,7 +101,7 @@ function App() {
     }
   }
 
-  const loadData = async () => {
+  const loadData = async (silent = false) => {
     try {
       const [rewardsRes, statsRes, analyticsRes] = await Promise.all([
         axios.get(`${API_URL}/rewards`),
@@ -130,12 +109,30 @@ function App() {
         axios.get(`${API_URL}/analytics`)
       ])
       setRewards(rewardsRes.data)
-      setStats(statsRes.data)
+      if (silent) {
+        setStats(prev => {
+          if (prev && statsRes.data.rewardsRedeemed > prev.rewardsRedeemed) {
+            const diff = statsRes.data.rewardsRedeemed - prev.rewardsRedeemed
+            setNotification(`🎁 ${diff} nuovo reward riscattato da uno spettatore!`)
+            setTimeout(() => setNotification(''), 5000)
+          }
+          return statsRes.data
+        })
+      } else {
+        setStats(statsRes.data)
+      }
       setAnalytics(analyticsRes.data)
     } catch (error) {
       console.error('Error loading data:', error)
     }
   }
+
+  // Polling automatico ogni 10 secondi
+  useEffect(() => {
+    if (!user) return
+    const interval = setInterval(() => loadData(true), 10000)
+    return () => clearInterval(interval)
+  }, [user])
 
   const createReward = async (rewardData) => {
     try {
@@ -158,38 +155,16 @@ function App() {
     }
   }
 
-  const openEditModal = (reward) => {
-    setEditingReward(reward)
-    setEditForm({ name: reward.name || '', description: reward.description || '', points: reward.points || '', active: reward.active !== undefined ? reward.active : true })
-  }
-
-  const closeEditModal = () => {
-    setEditingReward(null)
-    setEditForm({ name: '', description: '', points: '', active: true })
-  }
-
-  const saveEditReward = async () => {
-    if (!editForm.name || !editForm.points) return alert('Nome e punti sono obbligatori!')
-    const id = editingReward.id || editingReward._id
-    try {
-      const response = await axios.put(`${API_URL}/rewards/${id}`, { ...editForm, points: parseInt(editForm.points) })
-      setRewards(rewards.map(r => (r.id === id || r._id === id) ? response.data : r))
-      closeEditModal()
-      alert('✅ Reward aggiornato!')
-    } catch (error) {
-      alert('❌ Errore nell\'aggiornamento')
-    }
-  }
-
   const handleLogout = () => {
-    socketRef.current?.disconnect()
     setUser(null)
     setCurrentPage('login')
-    setNotifications([])
   }
 
   const handleViewerLogin = async () => {
-    if (!viewerUsername.trim() || !viewerStreamer.trim()) return alert('Inserisci il tuo username e quello dello streamer!')
+    if (!viewerUsername.trim() || !viewerStreamer.trim()) {
+      alert('Inserisci il tuo username e quello dello streamer!')
+      return
+    }
     setViewerLoading(true)
     try {
       const [userRes, rewardsRes] = await Promise.all([
@@ -214,10 +189,7 @@ function App() {
     }
     setRedeemMessage('⏳ Riscatto in corso...')
     try {
-      await axios.post(`${API_URL}/rewards/${reward.id || reward._id}/redeem`, {
-        viewerUsername: viewerData.username || viewerData.displayName,
-        streamerUsername: viewerStreamer
-      })
+      await axios.post(`${API_URL}/rewards/${reward.id || reward._id}/redeem`, { viewerUsername: viewerData.username })
       setViewerData(prev => ({ ...prev, points: (prev.points || 0) - reward.points }))
       setRedeemMessage(`🎉 Hai riscattato "${reward.name}"!`)
     } catch (error) {
@@ -229,6 +201,7 @@ function App() {
   const isPro = user?.plan === 'pro'
   const widgetUrl = user ? `${window.location.origin}/widget?user=${user.username || user.displayName}` : ''
   const viewerPageUrl = user ? `${window.location.origin}?viewer=1&streamer=${user.username || user.displayName}` : ''
+
   const copyWidgetUrl = () => { navigator.clipboard.writeText(widgetUrl); setWidgetCopied(true); setTimeout(() => setWidgetCopied(false), 2000) }
   const copyViewerUrl = () => { navigator.clipboard.writeText(viewerPageUrl); setViewerUrlCopied(true); setTimeout(() => setViewerUrlCopied(false), 2000) }
 
@@ -249,29 +222,14 @@ function App() {
     </nav>
   )
 
-  const inputStyle = { width: '100%', padding: '12px 16px', marginBottom: '12px', borderRadius: '8px', border: '2px solid #333', background: '#1a1a1a', color: '#fff', fontSize: '16px', outline: 'none', boxSizing: 'border-box' }
-  const modalInputStyle = { width: '100%', padding: '10px 14px', marginBottom: '12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)', background: '#0a0a0a', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }
+  const inputStyle = {
+    width: '100%', padding: '12px 16px', marginBottom: '12px',
+    borderRadius: '8px', border: '2px solid #333', background: '#1a1a1a',
+    color: '#fff', fontSize: '16px', outline: 'none', boxSizing: 'border-box'
+  }
 
   return (
     <div className="app">
-
-      {/* TOAST NOTIFICHE REAL-TIME */}
-      <div style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 99999, display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '340px' }}>
-        {notifications.map(n => (
-          <div key={n.id} style={{ background: 'linear-gradient(135deg, #111, #1a1a1a)', border: '1px solid #53FC58', borderRadius: '12px', padding: '16px 20px', boxShadow: '0 0 20px rgba(83,252,88,0.3)', animation: 'slideIn 0.3s ease', display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span style={{ fontSize: '28px' }}>🎁</span>
-            <div style={{ flex: 1 }}>
-              <div style={{ color: '#53FC58', fontWeight: 700, fontSize: '14px' }}>Reward Riscattato!</div>
-              <div style={{ color: '#fff', fontSize: '13px', marginTop: '2px' }}><strong>{n.viewerUsername}</strong> ha riscattato <strong>{n.rewardName}</strong></div>
-              <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px', marginTop: '2px' }}>{n.rewardPoints} punti</div>
-            </div>
-            <button onClick={() => setNotifications(prev => prev.filter(x => x.id !== n.id))} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.3)', cursor: 'pointer', fontSize: '16px' }}>✕</button>
-          </div>
-        ))}
-      </div>
-
-      <style>{`@keyframes slideIn { from { transform: translateX(100px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }`}</style>
-
       {upgradeMessage && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999, background: upgradeMessage.includes('🎉') ? '#53FC58' : '#ff4444', color: upgradeMessage.includes('🎉') ? '#000' : '#fff', padding: '14px', textAlign: 'center', fontWeight: 700, fontSize: '16px' }}>
           {upgradeMessage}
@@ -279,30 +237,16 @@ function App() {
         </div>
       )}
 
-      {/* MODAL MODIFICA REWARD */}
-      {editingReward && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-          <div style={{ background: '#111', border: '1px solid rgba(83,252,88,0.3)', borderRadius: '16px', padding: '32px', width: '100%', maxWidth: '480px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-              <h2 style={{ color: '#fff', margin: 0, fontSize: '20px' }}>✏️ Modifica Reward</h2>
-              <button onClick={closeEditModal} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', fontSize: '20px', cursor: 'pointer' }}>✕</button>
-            </div>
-            <label style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Nome Reward</label>
-            <input type="text" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} style={modalInputStyle} />
-            <label style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Descrizione</label>
-            <input type="text" value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} style={modalInputStyle} />
-            <label style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Punti Richiesti</label>
-            <input type="number" value={editForm.points} onChange={(e) => setEditForm({ ...editForm, points: e.target.value })} style={modalInputStyle} />
-            <label style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '8px' }}>Stato</label>
-            <div style={{ display: 'flex', gap: '10px', marginBottom: '24px' }}>
-              <button onClick={() => setEditForm({ ...editForm, active: true })} style={{ flex: 1, padding: '10px', borderRadius: '8px', border: editForm.active ? '2px solid #53FC58' : '1px solid rgba(255,255,255,0.1)', background: editForm.active ? 'rgba(83,252,88,0.1)' : 'transparent', color: editForm.active ? '#53FC58' : 'rgba(255,255,255,0.5)', fontWeight: 700, cursor: 'pointer' }}>✅ Attivo</button>
-              <button onClick={() => setEditForm({ ...editForm, active: false })} style={{ flex: 1, padding: '10px', borderRadius: '8px', border: !editForm.active ? '2px solid #ff9800' : '1px solid rgba(255,255,255,0.1)', background: !editForm.active ? 'rgba(255,152,0,0.1)' : 'transparent', color: !editForm.active ? '#ff9800' : 'rgba(255,255,255,0.5)', fontWeight: 700, cursor: 'pointer' }}>⏸️ Disattivo</button>
-            </div>
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <button onClick={closeEditModal} style={{ flex: 1, padding: '12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: 'rgba(255,255,255,0.6)', fontWeight: 700, cursor: 'pointer' }}>Annulla</button>
-              <button onClick={saveEditReward} style={{ flex: 2, padding: '12px', borderRadius: '8px', border: 'none', background: '#53FC58', color: '#000', fontWeight: 700, cursor: 'pointer' }}>💾 Salva Modifiche</button>
-            </div>
-          </div>
+      {notification && (
+        <div style={{
+          position: 'fixed', bottom: '24px', right: '24px', zIndex: 9999,
+          background: '#53FC58', color: '#000',
+          padding: '16px 24px', borderRadius: '12px',
+          fontWeight: 700, fontSize: '15px',
+          boxShadow: '0 4px 24px rgba(83,252,88,0.4)',
+          animation: 'slideIn 0.3s ease'
+        }}>
+          {notification}
         </div>
       )}
 
@@ -310,22 +254,21 @@ function App() {
       {currentPage === 'login' && (
         <div className="login-page">
           <div className="login-container">
-            <div className="login-header"><h1>🎮 Kick Loyalty</h1><p>Sistema di Rewards per il Tuo Stream</p></div>
+            <div className="login-header">
+              <h1>🎮 Kick Loyalty</h1>
+              <p>Sistema di Rewards per il Tuo Stream</p>
+            </div>
             <div className="login-box">
               <h2>Accedi alla Dashboard</h2>
               <p className="login-description">Gestisci rewards, punti e fidelizza la tua community</p>
-              <button className="btn-kick-login" onClick={handleLogin} disabled={loading}>{loading ? '⏳ Caricamento...' : '🟢 Login con Kick'}</button>
-              <div style={{ margin: '16px 0', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
-                <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>oppure accedi manualmente</span>
-                <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
-              </div>
-              <input type="text" placeholder="Inserisci username Kick..." value={kickUsername} onChange={(e) => setKickUsername(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleLogin()} style={{ ...inputStyle, background: '#111', border: '1px solid rgba(255,255,255,0.1)', fontSize: '14px', color: 'rgba(255,255,255,0.6)' }} />
-              {kickUsername && (
-                <button onClick={handleLogin} disabled={loading} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: 'rgba(255,255,255,0.6)', fontWeight: 600, cursor: 'pointer', fontSize: '14px', marginBottom: '12px' }}>🚀 Entra con username</button>
-              )}
-              <div style={{ marginTop: '8px', textAlign: 'center' }}>
-                <button onClick={() => setCurrentPage('viewer')} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.6)', borderRadius: '8px', padding: '10px 20px', cursor: 'pointer', fontSize: '14px' }}>👀 Sei uno spettatore? Clicca qui</button>
+              <input type="text" placeholder="Il tuo username Kick... (opzionale)" value={kickUsername} onChange={(e) => setKickUsername(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleLogin()} style={inputStyle} />
+              <button className="btn-kick-login" onClick={handleLogin} disabled={loading}>
+                {loading ? '⏳ Caricamento...' : kickUsername ? '🚀 Entra con username' : '🟢 Login con Kick'}
+              </button>
+              <div style={{ marginTop: '16px', textAlign: 'center' }}>
+                <button onClick={() => setCurrentPage('viewer')} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.6)', borderRadius: '8px', padding: '10px 20px', cursor: 'pointer', fontSize: '14px' }}>
+                  👀 Sei uno spettatore? Clicca qui
+                </button>
               </div>
               <div className="login-features">
                 <div className="feature"><span className="feature-icon">⭐</span><span>Rewards Personalizzati</span></div>
@@ -341,16 +284,23 @@ function App() {
       {currentPage === 'viewer' && (
         <div className="login-page">
           <div className="login-container">
-            <div className="login-header"><h1>🎮 Kick Loyalty</h1><p>Pagina Spettatori</p></div>
+            <div className="login-header">
+              <h1>🎮 Kick Loyalty</h1>
+              <p>Pagina Spettatori</p>
+            </div>
             {!viewerData ? (
               <div className="login-box">
                 <h2>👀 Accedi come Spettatore</h2>
                 <p className="login-description">Visualizza i tuoi punti e riscatta i rewards</p>
                 <input type="text" placeholder="Il tuo username Kick" value={viewerUsername} onChange={(e) => setViewerUsername(e.target.value)} style={inputStyle} />
                 <input type="text" placeholder="Username dello streamer" value={viewerStreamer} onChange={(e) => setViewerStreamer(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleViewerLogin()} style={inputStyle} />
-                <button className="btn-kick-login" onClick={handleViewerLogin} disabled={viewerLoading}>{viewerLoading ? '⏳ Caricamento...' : '🚀 Entra'}</button>
+                <button className="btn-kick-login" onClick={handleViewerLogin} disabled={viewerLoading}>
+                  {viewerLoading ? '⏳ Caricamento...' : '🚀 Entra'}
+                </button>
                 <div style={{ marginTop: '16px', textAlign: 'center' }}>
-                  <button onClick={() => setCurrentPage('login')} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '13px' }}>← Sei uno streamer? Vai al login</button>
+                  <button onClick={() => setCurrentPage('login')} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '13px' }}>
+                    ← Sei uno streamer? Vai al login
+                  </button>
                 </div>
               </div>
             ) : (
@@ -361,7 +311,9 @@ function App() {
                   <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px', marginTop: '4px' }}>Stream di: {viewerStreamer}</div>
                 </div>
                 {redeemMessage && (
-                  <div style={{ background: redeemMessage.includes('🎉') ? 'rgba(83,252,88,0.15)' : 'rgba(255,68,68,0.15)', border: `1px solid ${redeemMessage.includes('🎉') ? '#53FC58' : '#ff4444'}`, borderRadius: '8px', padding: '12px', marginBottom: '16px', textAlign: 'center', fontWeight: 600, color: redeemMessage.includes('🎉') ? '#53FC58' : '#ff4444' }}>{redeemMessage}</div>
+                  <div style={{ background: redeemMessage.includes('🎉') ? 'rgba(83,252,88,0.15)' : 'rgba(255,68,68,0.15)', border: `1px solid ${redeemMessage.includes('🎉') ? '#53FC58' : '#ff4444'}`, borderRadius: '8px', padding: '12px', marginBottom: '16px', textAlign: 'center', fontWeight: 600, color: redeemMessage.includes('🎉') ? '#53FC58' : '#ff4444' }}>
+                    {redeemMessage}
+                  </div>
                 )}
                 <h3 style={{ color: '#fff', marginBottom: '16px' }}>🎁 Rewards Disponibili</h3>
                 {viewerRewards.filter(r => r.active).length === 0 ? (
@@ -374,7 +326,9 @@ function App() {
                           <div style={{ fontWeight: 700, color: '#fff', marginBottom: '4px' }}>{reward.name}</div>
                           <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px' }}>{reward.description}</div>
                         </div>
-                        <button onClick={() => handleRedeem(reward)} style={{ background: (viewerData.points || 0) >= reward.points ? '#53FC58' : 'rgba(255,255,255,0.1)', color: (viewerData.points || 0) >= reward.points ? '#000' : 'rgba(255,255,255,0.4)', border: 'none', borderRadius: '8px', padding: '10px 16px', fontWeight: 700, fontSize: '13px', cursor: 'pointer', whiteSpace: 'nowrap', minWidth: '100px' }}>{reward.points} pt</button>
+                        <button onClick={() => handleRedeem(reward)} style={{ background: (viewerData.points || 0) >= reward.points ? '#53FC58' : 'rgba(255,255,255,0.1)', color: (viewerData.points || 0) >= reward.points ? '#000' : 'rgba(255,255,255,0.4)', border: 'none', borderRadius: '8px', padding: '10px 16px', fontWeight: 700, fontSize: '13px', cursor: 'pointer', whiteSpace: 'nowrap', minWidth: '100px' }}>
+                          {reward.points} pt
+                        </button>
                       </div>
                     ))}
                   </div>
@@ -396,9 +350,12 @@ function App() {
                 <strong style={{ color: '#53FC58', fontSize: '16px' }}>🚀 Passa a KickLoyalty Pro</strong>
                 <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', marginTop: '4px' }}>Rewards illimitati, analytics avanzate, priority support — €19/mese</p>
               </div>
-              <button onClick={handleUpgrade} disabled={upgradeLoading} style={{ background: '#53FC58', color: '#000', border: 'none', borderRadius: '8px', padding: '10px 24px', fontWeight: 700, fontSize: '14px', cursor: 'pointer', whiteSpace: 'nowrap' }}>{upgradeLoading ? '⏳...' : '💎 Upgrade a Pro'}</button>
+              <button onClick={handleUpgrade} disabled={upgradeLoading} style={{ background: '#53FC58', color: '#000', border: 'none', borderRadius: '8px', padding: '10px 24px', fontWeight: 700, fontSize: '14px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                {upgradeLoading ? '⏳...' : '💎 Upgrade a Pro'}
+              </button>
             </div>
           )}
+
           {stats && (
             <div className="stats-grid">
               <div className="stat-card"><div className="stat-icon">👥</div><div className="stat-info"><h3>{stats.totalViewers.toLocaleString()}</h3><p>Total Viewers</p></div></div>
@@ -407,27 +364,47 @@ function App() {
               <div className="stat-card"><div className="stat-icon">🎁</div><div className="stat-info"><h3>{stats.rewardsRedeemed}</h3><p>Rewards Redeemed</p></div></div>
             </div>
           )}
+
+          {/* WIDGET OBS */}
           <div style={{ margin: '20px', background: 'linear-gradient(135deg, #0e0e0e, #1a1a1a)', border: '1px solid rgba(83,252,88,0.3)', borderRadius: '12px', padding: '24px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}><span style={{ fontSize: '24px' }}>🎮</span><h2 style={{ color: '#53FC58', margin: 0, fontSize: '18px' }}>Widget OBS</h2></div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+              <span style={{ fontSize: '24px' }}>🎮</span>
+              <h2 style={{ color: '#53FC58', margin: 0, fontSize: '18px' }}>Widget OBS</h2>
+            </div>
             <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', marginBottom: '16px' }}>Aggiungi come <strong style={{ color: '#fff' }}>Browser Source</strong> in OBS per mostrare le notifiche rewards in live.</p>
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
               <input type="text" readOnly value={widgetUrl} style={{ flex: 1, minWidth: '200px', padding: '10px 14px', background: '#0a0a0a', border: '1px solid rgba(83,252,88,0.2)', borderRadius: '8px', color: '#53FC58', fontSize: '13px', fontFamily: 'monospace', outline: 'none' }} />
-              <button onClick={copyWidgetUrl} style={{ background: widgetCopied ? '#2a2a2a' : '#53FC58', color: widgetCopied ? '#53FC58' : '#000', border: widgetCopied ? '1px solid #53FC58' : 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: 700, fontSize: '14px', cursor: 'pointer', whiteSpace: 'nowrap' }}>{widgetCopied ? '✅ Copiato!' : '📋 Copia URL'}</button>
+              <button onClick={copyWidgetUrl} style={{ background: widgetCopied ? '#2a2a2a' : '#53FC58', color: widgetCopied ? '#53FC58' : '#000', border: widgetCopied ? '1px solid #53FC58' : 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: 700, fontSize: '14px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                {widgetCopied ? '✅ Copiato!' : '📋 Copia URL'}
+              </button>
             </div>
             <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', marginTop: '10px' }}>💡 In OBS: Fonti → + → Browser → incolla l'URL → dimensioni consigliate 400x300px</p>
           </div>
+
+          {/* LINK SPETTATORI */}
           <div style={{ margin: '0 20px 20px', background: 'linear-gradient(135deg, #0e0e0e, #1a1a1a)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '24px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}><span style={{ fontSize: '24px' }}>👀</span><h2 style={{ color: '#fff', margin: 0, fontSize: '18px' }}>Link Spettatori</h2></div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+              <span style={{ fontSize: '24px' }}>👀</span>
+              <h2 style={{ color: '#fff', margin: 0, fontSize: '18px' }}>Link Spettatori</h2>
+            </div>
             <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', marginBottom: '16px' }}>Condividi questo link in chat — i tuoi spettatori vedono i loro punti e riscattano i rewards.</p>
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
               <input type="text" readOnly value={viewerPageUrl} style={{ flex: 1, minWidth: '200px', padding: '10px 14px', background: '#0a0a0a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#fff', fontSize: '13px', fontFamily: 'monospace', outline: 'none' }} />
-              <button onClick={copyViewerUrl} style={{ background: viewerUrlCopied ? '#2a2a2a' : '#fff', color: viewerUrlCopied ? '#fff' : '#000', border: viewerUrlCopied ? '1px solid #fff' : 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: 700, fontSize: '14px', cursor: 'pointer', whiteSpace: 'nowrap' }}>{viewerUrlCopied ? '✅ Copiato!' : '📋 Copia Link'}</button>
+              <button onClick={copyViewerUrl} style={{ background: viewerUrlCopied ? '#2a2a2a' : '#fff', color: viewerUrlCopied ? '#fff' : '#000', border: viewerUrlCopied ? '1px solid #fff' : 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: 700, fontSize: '14px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                {viewerUrlCopied ? '✅ Copiato!' : '📋 Copia Link'}
+              </button>
             </div>
           </div>
+
           <div className="rewards-section">
             <div className="section-header">
               <h2>🎁 Gestione Rewards</h2>
-              <button className="btn-primary" onClick={() => { const name = prompt('Nome reward:'); const description = prompt('Descrizione:'); const points = prompt('Punti richiesti:'); if (name && description && points) createReward({ name, description, points: parseInt(points), type: 'custom', active: true }) }}>+ Nuovo Reward</button>
+              <button className="btn-primary" onClick={() => {
+                const name = prompt('Nome reward:')
+                const description = prompt('Descrizione:')
+                const points = prompt('Punti richiesti:')
+                if (name && description && points) createReward({ name, description, points: parseInt(points), type: 'custom', active: true })
+              }}>+ Nuovo Reward</button>
             </div>
             <div className="rewards-grid">
               {rewards.map(reward => (
@@ -439,10 +416,7 @@ function App() {
                   <p className="reward-description">{reward.description}</p>
                   <div className="reward-footer">
                     <div className="reward-points"><span className="points-value">{reward.points}</span><span className="points-label">punti</span></div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <button onClick={() => openEditModal(reward)} style={{ background: 'rgba(83,252,88,0.1)', color: '#53FC58', border: '1px solid rgba(83,252,88,0.3)', borderRadius: '8px', padding: '8px 14px', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>✏️ Modifica</button>
-                      <button className="btn-delete" onClick={() => deleteReward(reward.id || reward._id)}>🗑️ Elimina</button>
-                    </div>
+                    <button className="btn-delete" onClick={() => deleteReward(reward.id || reward._id)}>🗑️ Elimina</button>
                   </div>
                 </div>
               ))}
@@ -511,7 +485,10 @@ function App() {
                 <h3>🌱 Starter</h3>
                 <div className="price"><span className="price-value">GRATIS</span></div>
                 <ul className="features-list">
-                  <li>✅ Fino a 100 viewers</li><li>✅ 5 rewards personalizzati</li><li>✅ Analytics base</li><li>✅ Support email</li>
+                  <li>✅ Fino a 100 viewers</li>
+                  <li>✅ 5 rewards personalizzati</li>
+                  <li>✅ Analytics base</li>
+                  <li>✅ Support email</li>
                 </ul>
                 <button className="btn-plan" disabled={!isPro}>{!isPro ? '✅ Piano Attuale' : 'Downgrade'}</button>
               </div>
@@ -520,15 +497,25 @@ function App() {
                 <h3>🚀 Pro</h3>
                 <div className="price"><span className="price-value">€19</span><span className="price-period">/mese</span></div>
                 <ul className="features-list">
-                  <li>✅ Viewers illimitati</li><li>✅ Rewards illimitati</li><li>✅ Analytics avanzate</li><li>✅ Integrazioni custom</li><li>✅ Priority support</li>
+                  <li>✅ Viewers illimitati</li>
+                  <li>✅ Rewards illimitati</li>
+                  <li>✅ Analytics avanzate</li>
+                  <li>✅ Integrazioni custom</li>
+                  <li>✅ Priority support</li>
                 </ul>
-                <button className="btn-plan btn-plan-featured" onClick={!isPro ? handleUpgrade : undefined} disabled={upgradeLoading || isPro}>{isPro ? '✅ Piano Attuale' : upgradeLoading ? '⏳...' : '💳 Upgrade a Pro'}</button>
+                <button className="btn-plan btn-plan-featured" onClick={!isPro ? handleUpgrade : undefined} disabled={upgradeLoading || isPro}>
+                  {isPro ? '✅ Piano Attuale' : upgradeLoading ? '⏳...' : '💳 Upgrade a Pro'}
+                </button>
               </div>
               <div className="pricing-card">
                 <h3>⚡ Enterprise</h3>
                 <div className="price"><span className="price-value">Custom</span></div>
                 <ul className="features-list">
-                  <li>✅ Tutto del piano Pro</li><li>✅ White-label</li><li>✅ API dedicate</li><li>✅ Onboarding personale</li><li>✅ 24/7 support</li>
+                  <li>✅ Tutto del piano Pro</li>
+                  <li>✅ White-label</li>
+                  <li>✅ API dedicate</li>
+                  <li>✅ Onboarding personale</li>
+                  <li>✅ 24/7 support</li>
                 </ul>
                 <button className="btn-plan" onClick={() => window.open('mailto:info@kickloyalty.com')}>Contattaci</button>
               </div>
