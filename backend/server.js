@@ -70,7 +70,7 @@ app.get('/api/health', (req, res) => {
 
 // STEP 1 - Genera URL OAuth Kick
 app.get('/api/auth/kick/url', (req, res) => {
-  const scopes = ['user:read', 'channel:read', 'channel:write'].join(' ');
+  const scopes = ['user:read', 'channel:read'].join(' ');
   const authUrl = `https://kick.com/oauth2/authorize?` +
     `client_id=${KICK_CLIENT_ID}` +
     `&redirect_uri=${encodeURIComponent(KICK_REDIRECT_URI)}` +
