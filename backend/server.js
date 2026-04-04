@@ -1,8 +1,9 @@
-// v2
+// v3
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const mongoose = require('mongoose');
+const axios = require('axios');
 
 dotenv.config();
 
@@ -16,27 +17,40 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// MongoDB Connection (opzionale per ora)
+// MongoDB Connection
 const connectDB = async () => {
   if (process.env.MONGODB_URI && process.env.MONGODB_URI !== 'your_mongodb_connection_string') {
     try {
       await mongoose.connect(process.env.MONGODB_URI);
       console.log('✅ MongoDB connesso');
     } catch (error) {
-      console.log('⚠️  MongoDB non connesso (opzionale):', error.message);
+      console.log('⚠️ MongoDB non connesso (opzionale):', error.message);
     }
   } else {
-    console.log('ℹ️  MongoDB non configurato - usando mock data');
+    console.log(' ℹ️ MongoDB non configurato - usando mock data');
   }
 };
 
-// Schema Reward (opzionale)
+// Schema User
+const userSchema = new mongoose.Schema({
+  kickUsername: { type: String, required: true, unique: true },
+  kickDisplayName: { type: String },
+  kickAvatarUrl: { type: String },
+  kickChannelId: { type: String },
+  createdAt: { type: Date, default: Date.now },
+  lastLogin: { type: Date, default: Date.now }
+});
+
+const User = mongoose.models.User || mongoose.model('User', userSchema);
+
+// Schema Reward
 const rewardSchema = new mongoose.Schema({
   name: String,
   description: String,
   points: Number,
   type: String,
   active: Boolean,
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   createdAt: { type: Date, default: Date.now }
 });
 
@@ -63,139 +77,127 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Server is running!' });
 });
 
-// Auth - Login Mock
-app.post('/api/auth/login', (req, res) => {
+// Auth - Login con username Kick
+app.post('/api/auth/login', async (req, res) => {
   const { username } = req.body;
-  
-  res.json({
-    success: true,
-    user: {
-      id: '123',
-      username: username || 'DemoStreamer',
-      email: 'demo@kick.com',
-      avatar: 'https://ui-avatars.com/api/?name=Demo+Streamer&background=00FF00&color=000'
-    },
-    token: 'mock_token_' + Date.now()
-  });
+
+  if (!username) {
+    return res.status(400).json({ error: 'Username richiesto' });
+  }
+
+  try {
+    // Verifica che il canale Kick esiste
+    let kickData = null;
+    try {
+      const kickResponse = await axios.get(`https://kick.com/api/v1/channels/${username}`, {
+        timeout: 5000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+      kickData = kickResponse.data;
+    } catch (kickError) {
+      // Se Kick non risponde, usiamo i dati base
+      console.log('Kick API non disponibile, usando dati base');
+    }
+
+    // Crea o aggiorna utente nel DB
+    let user;
+    if (mongoose.connection.readyState === 1) {
+      user = await User.findOneAndUpdate(
+        { kickUsername: username.toLowerCase() },
+        {
+          kickUsername: username.toLowerCase(),
+          kickDisplayName: kickData?.user?.username || username,
+          kickAvatarUrl: kickData?.user?.profile_pic || null,
+          kickChannelId: kickData?.id?.toString() || null,
+          lastLogin: new Date()
+        },
+        { upsert: true, new: true }
+      );
+    } else {
+      // Mock user se non c'è DB
+      user = {
+        _id: 'mock_' + username,
+        kickUsername: username.toLowerCase(),
+        kickDisplayName: kickData?.user?.username || username,
+        kickAvatarUrl: kickData?.user?.profile_pic || null
+      };
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: user._id,
+        username: user.kickUsername,
+        displayName: user.kickDisplayName || username,
+        avatarUrl: user.kickAvatarUrl,
+        channelId: user.kickChannelId
+      }
+    });
+
+  } catch (error) {
+    console.error('Login error:', error.message);
+    res.status(500).json({ error: 'Errore durante il login' });
+  }
 });
 
-// Kick OAuth callback (mock)
-app.get('/api/auth/kick/callback', (req, res) => {
-  res.redirect(process.env.FRONTEND_URL + '/?login=success');
-});
-
-// Get all rewards
+// Rewards - GET
 app.get('/api/rewards', async (req, res) => {
   try {
-    // Prova a usare MongoDB se connesso
     if (mongoose.connection.readyState === 1) {
-      const rewards = await Reward.find();
-      if (rewards.length > 0) {
-        return res.json(rewards);
-      }
+      const userId = req.query.userId;
+      const query = userId ? { userId } : {};
+      const rewards = await Reward.find(query).sort({ createdAt: -1 });
+      res.json(rewards);
+    } else {
+      res.json(mockRewards);
     }
-    // Altrimenti usa mock data
-    res.json(mockRewards);
   } catch (error) {
     res.json(mockRewards);
   }
 });
 
-// Create reward
+// Rewards - POST
 app.post('/api/rewards', async (req, res) => {
   try {
-    const { name, description, points, type } = req.body;
-    
     if (mongoose.connection.readyState === 1) {
-      const reward = new Reward({ name, description, points, type, active: true });
+      const reward = new Reward(req.body);
       await reward.save();
-      return res.json(reward);
-    }
-    
-    // Mock
-    const newReward = {
-      id: String(mockRewards.length + 1),
-      name,
-      description,
-      points,
-      type,
-      active: true
-    };
-    mockRewards.push(newReward);
-    res.json(newReward);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Update reward
-app.put('/api/rewards/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const updates = req.body;
-    
-    if (mongoose.connection.readyState === 1) {
-      const reward = await Reward.findByIdAndUpdate(id, updates, { new: true });
-      return res.json(reward);
-    }
-    
-    // Mock
-    const index = mockRewards.findIndex(r => r.id === id);
-    if (index !== -1) {
-      mockRewards[index] = { ...mockRewards[index], ...updates };
-      res.json(mockRewards[index]);
+      res.json(reward);
     } else {
-      res.status(404).json({ error: 'Reward non trovato' });
+      const newReward = { ...req.body, id: Date.now().toString() };
+      mockRewards.push(newReward);
+      res.json(newReward);
     }
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Delete reward
+// Rewards - DELETE
 app.delete('/api/rewards/:id', async (req, res) => {
   try {
-    const { id } = req.params;
-    
     if (mongoose.connection.readyState === 1) {
-      await Reward.findByIdAndDelete(id);
-      return res.json({ success: true });
+      await Reward.findByIdAndDelete(req.params.id);
+      res.json({ success: true });
+    } else {
+      mockRewards = mockRewards.filter(r => r.id !== req.params.id);
+      res.json({ success: true });
     }
-    
-    // Mock
-    mockRewards = mockRewards.filter(r => r.id !== id);
-    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Get stats
+// Stats
 app.get('/api/stats', (req, res) => {
   res.json(mockStats);
 });
 
-// Get analytics
-app.get('/api/analytics', (req, res) => {
-  res.json({
-    pointsDistribution: [
-      { month: 'Gen', points: 3400 },
-      { month: 'Feb', points: 4200 },
-      { month: 'Mar', points: 5100 },
-      { month: 'Apr', points: 6800 }
-    ],
-    topRewards: [
-      { name: 'Welcome Bonus', redeemed: 245 },
-      { name: 'Shoutout', redeemed: 156 },
-      { name: 'Custom Emote', redeemed: 89 }
-    ]
-  });
-});
-
 // Start server
-connectDB().then(() => {
-  app.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
-    console.log(`📊 API disponibili su http://localhost:${PORT}/api/`);
-  });
+connectDB();
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`📋 API disponibili su http://localhost:${PORT}/api/`);
 });

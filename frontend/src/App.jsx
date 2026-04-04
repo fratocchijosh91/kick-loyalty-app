@@ -9,13 +9,17 @@ function App() {
   const [rewards, setRewards] = useState([])
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(false)
-
+const [kickUsername, setKickUsername] = useState('');
   // Login
   const handleLogin = async () => {
+    if (!kickUsername.trim()) {
+  alert('Inserisci il tuo username Kick!');
+  return;
+}
     setLoading(true)
     try {
       const response = await axios.post(`${API_URL}/auth/login`, {
-        username: 'DemoStreamer'
+        username: kickUsername.trim()
       })
       setUser(response.data.user)
       setCurrentPage('dashboard')
@@ -88,13 +92,33 @@ function App() {
                 Gestisci rewards, punti e fidelizza la tua community
               </p>
               
-              <button 
-                className="btn-kick-login" 
-                onClick={handleLogin}
-                disabled={loading}
-              >
-                {loading ? '⏳ Caricamento...' : '🚀 Login con Kick'}
-              </button>
+              <input
+  type="text"
+  className="kick-username-input"
+  placeholder="Il tuo username Kick..."
+  value={kickUsername}
+  onChange={(e) => setKickUsername(e.target.value)}
+  onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
+  style={{
+    width: '100%',
+    padding: '12px 16px',
+    marginBottom: '12px',
+    borderRadius: '8px',
+    border: '2px solid #333',
+    background: '#1a1a1a',
+    color: '#fff',
+    fontSize: '16px',
+    outline: 'none',
+    boxSizing: 'border-box'
+  }}
+/>
+<button
+  className="btn-kick-login"
+  onClick={handleLogin}
+  disabled={loading}
+>
+  {loading ? '⏳ Caricamento...' : '🚀 Login con Kick'}
+</button>
               
               <div className="login-features">
                 <div className="feature">
