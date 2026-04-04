@@ -9,13 +9,46 @@ function App() {
   const [rewards, setRewards] = useState([])
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(false)
-const [kickUsername, setKickUsername] = useState('');
+  const [kickUsername, setKickUsername] = useState('')
+
+  // Gestisce callback OAuth Kick
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search)
+    const code = urlParams.get('code')
+    if (code) {
+      setLoading(true)
+      axios.post(`${API_URL}/auth/kick/callback`, { code })
+        .then(response => {
+          setUser(response.data.user)
+          setCurrentPage('dashboard')
+          loadData()
+          window.history.replaceState({}, document.title, '/')
+        })
+        .catch(error => {
+          console.error('OAuth callback error:', error)
+          alert('Errore login OAuth')
+        })
+        .finally(() => setLoading(false))
+    }
+  }, [])
+
   // Login
   const handleLogin = async () => {
     if (!kickUsername.trim()) {
-  alert('Inserisci il tuo username Kick!');
-  return;
-}
+      // OAuth reale Kick
+      try {
+        setLoading(true)
+        const response = await axios.get(`${API_URL}/auth/kick/url`)
+        window.location.href = response.data.url
+      } catch (error) {
+        alert('Errore connessione server')
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
+    // Login con username (fallback)
     setLoading(true)
     try {
       const response = await axios.post(`${API_URL}/auth/login`, {
@@ -93,32 +126,32 @@ const [kickUsername, setKickUsername] = useState('');
               </p>
               
               <input
-  type="text"
-  className="kick-username-input"
-  placeholder="Il tuo username Kick..."
-  value={kickUsername}
-  onChange={(e) => setKickUsername(e.target.value)}
-  onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
-  style={{
-    width: '100%',
-    padding: '12px 16px',
-    marginBottom: '12px',
-    borderRadius: '8px',
-    border: '2px solid #333',
-    background: '#1a1a1a',
-    color: '#fff',
-    fontSize: '16px',
-    outline: 'none',
-    boxSizing: 'border-box'
-  }}
-/>
-<button
-  className="btn-kick-login"
-  onClick={handleLogin}
-  disabled={loading}
->
-  {loading ? '⏳ Caricamento...' : '🚀 Login con Kick'}
-</button>
+                type="text"
+                className="kick-username-input"
+                placeholder="Il tuo username Kick... (opzionale)"
+                value={kickUsername}
+                onChange={(e) => setKickUsername(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
+                style={{
+                  width: '100%',
+                  padding: '12px 16px',
+                  marginBottom: '12px',
+                  borderRadius: '8px',
+                  border: '2px solid #333',
+                  background: '#1a1a1a',
+                  color: '#fff',
+                  fontSize: '16px',
+                  outline: 'none',
+                  boxSizing: 'border-box'
+                }}
+              />
+              <button
+                className="btn-kick-login"
+                onClick={handleLogin}
+                disabled={loading}
+              >
+                {loading ? '⏳ Caricamento...' : kickUsername ? '🚀 Entra con username' : '🟢 Login con Kick'}
+              </button>
               
               <div className="login-features">
                 <div className="feature">
@@ -142,7 +175,6 @@ const [kickUsername, setKickUsername] = useState('');
       {/* DASHBOARD */}
       {currentPage === 'dashboard' && user && (
         <div className="dashboard">
-          {/* NAVBAR */}
           <nav className="navbar">
             <div className="navbar-brand">
               <h1>🎮 Kick Loyalty</h1>
@@ -168,13 +200,12 @@ const [kickUsername, setKickUsername] = useState('');
               </button>
             </div>
             <div className="navbar-user">
-              <img src={user.avatar} alt={user.username} />
-              <span>{user.username}</span>
+              {user.avatarUrl && <img src={user.avatarUrl} alt={user.displayName} />}
+              <span>{user.displayName || user.username}</span>
               <button onClick={handleLogout} className="btn-logout">Logout</button>
             </div>
           </nav>
 
-          {/* STATS CARDS */}
           {stats && (
             <div className="stats-grid">
               <div className="stat-card">
@@ -208,7 +239,6 @@ const [kickUsername, setKickUsername] = useState('');
             </div>
           )}
 
-          {/* REWARDS MANAGER */}
           <div className="rewards-section">
             <div className="section-header">
               <h2>🎁 Gestione Rewards</h2>
@@ -219,7 +249,7 @@ const [kickUsername, setKickUsername] = useState('');
                   const description = prompt('Descrizione:')
                   const points = prompt('Punti richiesti:')
                   if (name && description && points) {
-                    createReward({ name, description, points: parseInt(points), type: 'custom' })
+                    createReward({ name, description, points: parseInt(points), type: 'custom', active: true })
                   }
                 }}
               >
@@ -260,25 +290,21 @@ const [kickUsername, setKickUsername] = useState('');
       {currentPage === 'analytics' && user && (
         <div className="dashboard">
           <nav className="navbar">
-            <div className="navbar-brand">
-              <h1>🎮 Kick Loyalty</h1>
-            </div>
+            <div className="navbar-brand"><h1>🎮 Kick Loyalty</h1></div>
             <div className="navbar-menu">
               <button onClick={() => setCurrentPage('dashboard')}>📊 Dashboard</button>
               <button className="active">📈 Analytics</button>
               <button onClick={() => setCurrentPage('pricing')}>💎 Pricing</button>
             </div>
             <div className="navbar-user">
-              <img src={user.avatar} alt={user.username} />
-              <span>{user.username}</span>
+              {user.avatarUrl && <img src={user.avatarUrl} alt={user.displayName} />}
+              <span>{user.displayName || user.username}</span>
               <button onClick={handleLogout} className="btn-logout">Logout</button>
             </div>
           </nav>
-
           <div className="analytics-page">
             <h2>📈 Analytics Dashboard</h2>
             <p>Statistiche e metriche del tuo sistema loyalty</p>
-            
             <div className="analytics-grid">
               <div className="analytics-card">
                 <h3>📊 Distribuzione Punti</h3>
@@ -289,22 +315,12 @@ const [kickUsername, setKickUsername] = useState('');
                   <p>Apr: 6,800 punti</p>
                 </div>
               </div>
-              
               <div className="analytics-card">
                 <h3>🏆 Top Rewards</h3>
                 <div className="top-rewards">
-                  <div className="reward-stat">
-                    <span>Welcome Bonus</span>
-                    <strong>245 volte</strong>
-                  </div>
-                  <div className="reward-stat">
-                    <span>Shoutout</span>
-                    <strong>156 volte</strong>
-                  </div>
-                  <div className="reward-stat">
-                    <span>Custom Emote</span>
-                    <strong>89 volte</strong>
-                  </div>
+                  <div className="reward-stat"><span>Welcome Bonus</span><strong>245 volte</strong></div>
+                  <div className="reward-stat"><span>Shoutout</span><strong>156 volte</strong></div>
+                  <div className="reward-stat"><span>Custom Emote</span><strong>89 volte</strong></div>
                 </div>
               </div>
             </div>
@@ -316,31 +332,25 @@ const [kickUsername, setKickUsername] = useState('');
       {currentPage === 'pricing' && user && (
         <div className="dashboard">
           <nav className="navbar">
-            <div className="navbar-brand">
-              <h1>🎮 Kick Loyalty</h1>
-            </div>
+            <div className="navbar-brand"><h1>🎮 Kick Loyalty</h1></div>
             <div className="navbar-menu">
               <button onClick={() => setCurrentPage('dashboard')}>📊 Dashboard</button>
               <button onClick={() => setCurrentPage('analytics')}>📈 Analytics</button>
               <button className="active">💎 Pricing</button>
             </div>
             <div className="navbar-user">
-              <img src={user.avatar} alt={user.username} />
-              <span>{user.username}</span>
+              {user.avatarUrl && <img src={user.avatarUrl} alt={user.displayName} />}
+              <span>{user.displayName || user.username}</span>
               <button onClick={handleLogout} className="btn-logout">Logout</button>
             </div>
           </nav>
-
           <div className="pricing-page">
             <h2>💎 Scegli il Tuo Piano</h2>
             <p>Trova il piano perfetto per la tua community</p>
-            
             <div className="pricing-grid">
               <div className="pricing-card">
                 <h3>🌱 Starter</h3>
-                <div className="price">
-                  <span className="price-value">GRATIS</span>
-                </div>
+                <div className="price"><span className="price-value">GRATIS</span></div>
                 <ul className="features-list">
                   <li>✅ Fino a 100 viewers</li>
                   <li>✅ 5 rewards personalizzati</li>
@@ -349,7 +359,6 @@ const [kickUsername, setKickUsername] = useState('');
                 </ul>
                 <button className="btn-plan">Piano Attuale</button>
               </div>
-
               <div className="pricing-card pricing-card-featured">
                 <div className="badge-popular">🔥 PIÙ POPOLARE</div>
                 <h3>🚀 Pro</h3>
@@ -366,12 +375,9 @@ const [kickUsername, setKickUsername] = useState('');
                 </ul>
                 <button className="btn-plan btn-plan-featured">Upgrade a Pro</button>
               </div>
-
               <div className="pricing-card">
                 <h3>⚡ Enterprise</h3>
-                <div className="price">
-                  <span className="price-value">Custom</span>
-                </div>
+                <div className="price"><span className="price-value">Custom</span></div>
                 <ul className="features-list">
                   <li>✅ Tutto del piano Pro</li>
                   <li>✅ White-label</li>

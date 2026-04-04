@@ -1,4 +1,4 @@
-// v3
+// v4 - Kick OAuth reale
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
@@ -10,11 +10,13 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+const KICK_CLIENT_ID = process.env.KICK_CLIENT_ID;
+const KICK_CLIENT_SECRET = process.env.KICK_CLIENT_SECRET;
+const KICK_REDIRECT_URI = process.env.KICK_REDIRECT_URI || 'https://kick-loyalty-app.vercel.app/auth/callback';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://kick-loyalty-app.vercel.app';
+
 // Middleware
-app.use(cors({
-  origin: '*',
-  credentials: false
-}));
+app.use(cors({ origin: '*', credentials: false }));
 app.use(express.json());
 
 // MongoDB Connection
@@ -24,10 +26,8 @@ const connectDB = async () => {
       await mongoose.connect(process.env.MONGODB_URI);
       console.log('✅ MongoDB connesso');
     } catch (error) {
-      console.log('⚠️ MongoDB non connesso (opzionale):', error.message);
+      console.log('⚠️ MongoDB non connesso:', error.message);
     }
-  } else {
-    console.log(' ℹ️ MongoDB non configurato - usando mock data');
   }
 };
 
@@ -37,10 +37,11 @@ const userSchema = new mongoose.Schema({
   kickDisplayName: { type: String },
   kickAvatarUrl: { type: String },
   kickChannelId: { type: String },
+  kickAccessToken: { type: String },
+  kickRefreshToken: { type: String },
   createdAt: { type: Date, default: Date.now },
   lastLogin: { type: Date, default: Date.now }
 });
-
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 
 // Schema Reward
@@ -53,55 +54,103 @@ const rewardSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   createdAt: { type: Date, default: Date.now }
 });
-
 const Reward = mongoose.models.Reward || mongoose.model('Reward', rewardSchema);
 
-// Mock data per testing
 let mockRewards = [
   { id: '1', name: 'Welcome Bonus', description: '100 punti di benvenuto', points: 100, type: 'bonus', active: true },
   { id: '2', name: 'Viewer Shoutout', description: 'Menzione durante lo stream', points: 500, type: 'shoutout', active: true },
   { id: '3', name: 'Custom Emote', description: 'Emote personalizzata', points: 1000, type: 'emote', active: true }
 ];
 
-let mockStats = {
-  totalViewers: 1247,
-  activeMembers: 342,
-  totalPoints: 45678,
-  rewardsRedeemed: 89
-};
-
 // ==================== ROUTES ====================
 
-// Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Server is running!' });
 });
 
-// Auth - Login con username Kick
-app.post('/api/auth/login', async (req, res) => {
-  const { username } = req.body;
+// STEP 1 - Genera URL OAuth Kick
+app.get('/api/auth/kick/url', (req, res) => {
+  const scopes = ['user:read', 'channel:read', 'channel:write'].join(' ');
+  const authUrl = `https://kick.com/oauth2/authorize?` +
+    `client_id=${KICK_CLIENT_ID}` +
+    `&redirect_uri=${encodeURIComponent(KICK_REDIRECT_URI)}` +
+    `&response_type=code` +
+    `&scope=${encodeURIComponent(scopes)}`;
+  res.json({ url: authUrl });
+});
 
-  if (!username) {
-    return res.status(400).json({ error: 'Username richiesto' });
-  }
+// STEP 2 - Callback OAuth
+app.post('/api/auth/kick/callback', async (req, res) => {
+  const { code } = req.body;
+  if (!code) return res.status(400).json({ error: 'Code mancante' });
 
   try {
-    // Verifica che il canale Kick esiste
+    const tokenResponse = await axios.post('https://kick.com/oauth2/token', {
+      grant_type: 'authorization_code',
+      client_id: KICK_CLIENT_ID,
+      client_secret: KICK_CLIENT_SECRET,
+      redirect_uri: KICK_REDIRECT_URI,
+      code: code
+    }, { headers: { 'Content-Type': 'application/json' } });
+
+    const { access_token, refresh_token } = tokenResponse.data;
+
+    const userResponse = await axios.get('https://kick.com/api/v1/user', {
+      headers: { 'Authorization': `Bearer ${access_token}` }
+    });
+
+    const kickUser = userResponse.data;
+
+    let user;
+    if (mongoose.connection.readyState === 1) {
+      user = await User.findOneAndUpdate(
+        { kickUsername: kickUser.username.toLowerCase() },
+        {
+          kickUsername: kickUser.username.toLowerCase(),
+          kickDisplayName: kickUser.username,
+          kickAvatarUrl: kickUser.profile_pic || null,
+          kickChannelId: kickUser.id?.toString() || null,
+          kickAccessToken: access_token,
+          kickRefreshToken: refresh_token,
+          lastLogin: new Date()
+        },
+        { upsert: true, new: true }
+      );
+    } else {
+      user = { _id: 'mock_' + kickUser.username, kickUsername: kickUser.username.toLowerCase(), kickDisplayName: kickUser.username };
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: user._id,
+        username: user.kickUsername,
+        displayName: user.kickDisplayName,
+        avatarUrl: user.kickAvatarUrl,
+        channelId: user.kickChannelId
+      }
+    });
+  } catch (error) {
+    console.error('OAuth error:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Errore OAuth Kick', details: error.response?.data });
+  }
+});
+
+// Login con username (fallback)
+app.post('/api/auth/login', async (req, res) => {
+  const { username } = req.body;
+  if (!username) return res.status(400).json({ error: 'Username richiesto' });
+
+  try {
     let kickData = null;
     try {
       const kickResponse = await axios.get(`https://kick.com/api/v1/channels/${username}`, {
         timeout: 5000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+        headers: { 'User-Agent': 'Mozilla/5.0' }
       });
       kickData = kickResponse.data;
-    } catch (kickError) {
-      // Se Kick non risponde, usiamo i dati base
-      console.log('Kick API non disponibile, usando dati base');
-    }
+    } catch (e) { console.log('Kick API non disponibile'); }
 
-    // Crea o aggiorna utente nel DB
     let user;
     if (mongoose.connection.readyState === 1) {
       user = await User.findOneAndUpdate(
@@ -110,19 +159,12 @@ app.post('/api/auth/login', async (req, res) => {
           kickUsername: username.toLowerCase(),
           kickDisplayName: kickData?.user?.username || username,
           kickAvatarUrl: kickData?.user?.profile_pic || null,
-          kickChannelId: kickData?.id?.toString() || null,
           lastLogin: new Date()
         },
         { upsert: true, new: true }
       );
     } else {
-      // Mock user se non c'è DB
-      user = {
-        _id: 'mock_' + username,
-        kickUsername: username.toLowerCase(),
-        kickDisplayName: kickData?.user?.username || username,
-        kickAvatarUrl: kickData?.user?.profile_pic || null
-      };
+      user = { _id: 'mock_' + username, kickUsername: username.toLowerCase(), kickDisplayName: username };
     }
 
     res.json({
@@ -131,13 +173,10 @@ app.post('/api/auth/login', async (req, res) => {
         id: user._id,
         username: user.kickUsername,
         displayName: user.kickDisplayName || username,
-        avatarUrl: user.kickAvatarUrl,
-        channelId: user.kickChannelId
+        avatarUrl: user.kickAvatarUrl
       }
     });
-
   } catch (error) {
-    console.error('Login error:', error.message);
     res.status(500).json({ error: 'Errore durante il login' });
   }
 });
@@ -146,16 +185,12 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/rewards', async (req, res) => {
   try {
     if (mongoose.connection.readyState === 1) {
-      const userId = req.query.userId;
-      const query = userId ? { userId } : {};
-      const rewards = await Reward.find(query).sort({ createdAt: -1 });
+      const rewards = await Reward.find(req.query.userId ? { userId: req.query.userId } : {}).sort({ createdAt: -1 });
       res.json(rewards);
     } else {
       res.json(mockRewards);
     }
-  } catch (error) {
-    res.json(mockRewards);
-  }
+  } catch (error) { res.json(mockRewards); }
 });
 
 // Rewards - POST
@@ -170,9 +205,7 @@ app.post('/api/rewards', async (req, res) => {
       mockRewards.push(newReward);
       res.json(newReward);
     }
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+  } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 // Rewards - DELETE
@@ -180,22 +213,18 @@ app.delete('/api/rewards/:id', async (req, res) => {
   try {
     if (mongoose.connection.readyState === 1) {
       await Reward.findByIdAndDelete(req.params.id);
-      res.json({ success: true });
     } else {
       mockRewards = mockRewards.filter(r => r.id !== req.params.id);
-      res.json({ success: true });
     }
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+    res.json({ success: true });
+  } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 // Stats
 app.get('/api/stats', (req, res) => {
-  res.json(mockStats);
+  res.json({ totalViewers: 1247, activeMembers: 342, totalPoints: 45678, rewardsRedeemed: 89 });
 });
 
-// Start server
 connectDB();
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
