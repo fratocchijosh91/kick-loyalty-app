@@ -130,17 +130,24 @@ app.post('/api/auth/kick/callback', async (req, res) => {
       headers: { 'Authorization': `Bearer ${access_token}` }
     });
 
-    const kickUser = userResponse.data.data[0];
+    console.log('Kick user response:', JSON.stringify(userResponse.data));
+
+    // Gestisce diverse strutture di risposta
+    const userData = userResponse.data?.data?.[0] || userResponse.data?.data || userResponse.data;
+    const username = userData?.username || userData?.name || userData?.email || 'user_' + Date.now();
+    const displayName = userData?.name || userData?.username || username;
+    const avatarUrl = userData?.profile_picture || userData?.avatar || null;
+    const channelId = userData?.user_id?.toString() || userData?.id?.toString() || null;
 
     let user;
     if (mongoose.connection.readyState === 1) {
       user = await User.findOneAndUpdate(
-        { kickUsername: kickUser.username.toLowerCase() },
+        { kickUsername: username.toLowerCase() },
         {
-          kickUsername: kickUser.username.toLowerCase(),
-          kickDisplayName: kickUser.name || kickUser.username,
-          kickAvatarUrl: kickUser.profile_picture || null,
-          kickChannelId: kickUser.user_id?.toString() || null,
+          kickUsername: username.toLowerCase(),
+          kickDisplayName: displayName,
+          kickAvatarUrl: avatarUrl,
+          kickChannelId: channelId,
           kickAccessToken: access_token,
           kickRefreshToken: refresh_token || null,
           lastLogin: new Date()
@@ -149,9 +156,9 @@ app.post('/api/auth/kick/callback', async (req, res) => {
       );
     } else {
       user = {
-        _id: 'mock_' + kickUser.username,
-        kickUsername: kickUser.username.toLowerCase(),
-        kickDisplayName: kickUser.name || kickUser.username
+        _id: 'mock_' + username,
+        kickUsername: username.toLowerCase(),
+        kickDisplayName: displayName
       };
     }
 
@@ -167,6 +174,7 @@ app.post('/api/auth/kick/callback', async (req, res) => {
     });
   } catch (error) {
     console.error('OAuth error:', error.response?.data || error.message);
+    console.error('OAuth error details:', JSON.stringify(error.response?.data));
     res.status(500).json({ error: 'Errore OAuth Kick', details: error.response?.data });
   }
 });
