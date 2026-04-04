@@ -313,7 +313,22 @@ app.post('/api/rewards', async (req, res) => {
     }
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
-
+app.put('/api/rewards/:id', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState === 1) {
+      const reward = await Reward.findByIdAndUpdate(
+        req.params.id,
+        req.body,
+        { new: true }
+      );
+      res.json(reward);
+    } else {
+      const idx = mockRewards.findIndex(r => r.id === req.params.id);
+      if (idx !== -1) mockRewards[idx] = { ...mockRewards[idx], ...req.body };
+      res.json(mockRewards[idx]);
+    }
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
 app.delete('/api/rewards/:id', async (req, res) => {
   try {
     if (mongoose.connection.readyState === 1) {
@@ -392,4 +407,3 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`📋 API disponibili su http://localhost:${PORT}/api/`);
 });
-
