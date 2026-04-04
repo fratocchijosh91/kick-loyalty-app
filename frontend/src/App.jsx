@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from 'react'
 import axios from 'axios'
 
@@ -13,6 +12,7 @@ function App() {
   const [kickUsername, setKickUsername] = useState('')
   const [upgradeLoading, setUpgradeLoading] = useState(false)
   const [upgradeMessage, setUpgradeMessage] = useState('')
+  const [widgetCopied, setWidgetCopied] = useState(false)
 
   // Gestisce callback OAuth Kick e risultato upgrade
   useEffect(() => {
@@ -133,6 +133,15 @@ function App() {
 
   const isPro = user?.plan === 'pro'
 
+  // Widget URL
+  const widgetUrl = user ? `${window.location.origin}/widget?user=${user.username || user.displayName}` : ''
+
+  const copyWidgetUrl = () => {
+    navigator.clipboard.writeText(widgetUrl)
+    setWidgetCopied(true)
+    setTimeout(() => setWidgetCopied(false), 2000)
+  }
+
   // Navbar condivisa
   const Navbar = () => (
     <nav className="navbar">
@@ -243,6 +252,52 @@ function App() {
               <div className="stat-card"><div className="stat-icon">🎁</div><div className="stat-info"><h3>{stats.rewardsRedeemed}</h3><p>Rewards Redeemed</p></div></div>
             </div>
           )}
+
+          {/* SEZIONE WIDGET OBS */}
+          <div style={{
+            margin: '20px',
+            background: 'linear-gradient(135deg, #0e0e0e, #1a1a1a)',
+            border: '1px solid rgba(83,252,88,0.3)',
+            borderRadius: '12px',
+            padding: '24px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+              <span style={{ fontSize: '24px' }}>🎮</span>
+              <h2 style={{ color: '#53FC58', margin: 0, fontSize: '18px' }}>Widget OBS</h2>
+            </div>
+            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', marginBottom: '16px' }}>
+              Aggiungi questo URL come <strong style={{ color: '#fff' }}>Browser Source</strong> in OBS per mostrare le notifiche rewards in live.
+            </p>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                readOnly
+                value={widgetUrl}
+                style={{
+                  flex: 1, minWidth: '200px', padding: '10px 14px',
+                  background: '#0a0a0a', border: '1px solid rgba(83,252,88,0.2)',
+                  borderRadius: '8px', color: '#53FC58', fontSize: '13px',
+                  fontFamily: 'monospace', outline: 'none'
+                }}
+              />
+              <button
+                onClick={copyWidgetUrl}
+                style={{
+                  background: widgetCopied ? '#2a2a2a' : '#53FC58',
+                  color: widgetCopied ? '#53FC58' : '#000',
+                  border: widgetCopied ? '1px solid #53FC58' : 'none',
+                  borderRadius: '8px', padding: '10px 20px',
+                  fontWeight: 700, fontSize: '14px', cursor: 'pointer',
+                  whiteSpace: 'nowrap', transition: 'all 0.2s'
+                }}
+              >
+                {widgetCopied ? '✅ Copiato!' : '📋 Copia URL'}
+              </button>
+            </div>
+            <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', marginTop: '10px' }}>
+              💡 In OBS: Fonti → + → Browser → incolla l'URL → dimensioni consigliate 400x300px
+            </p>
+          </div>
 
           <div className="rewards-section">
             <div className="section-header">
