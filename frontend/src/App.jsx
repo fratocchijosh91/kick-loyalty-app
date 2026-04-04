@@ -22,6 +22,10 @@ function App() {
   const [viewerLoading, setViewerLoading] = useState(false)
   const [redeemMessage, setRedeemMessage] = useState('')
 
+  // MODIFICA REWARD
+  const [editingReward, setEditingReward] = useState(null)
+  const [editForm, setEditForm] = useState({ name: '', description: '', points: '', active: true })
+
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search)
     const code = urlParams.get('code')
@@ -136,6 +140,40 @@ function App() {
     }
   }
 
+  const openEditModal = (reward) => {
+    setEditingReward(reward)
+    setEditForm({
+      name: reward.name || '',
+      description: reward.description || '',
+      points: reward.points || '',
+      active: reward.active !== undefined ? reward.active : true
+    })
+  }
+
+  const closeEditModal = () => {
+    setEditingReward(null)
+    setEditForm({ name: '', description: '', points: '', active: true })
+  }
+
+  const saveEditReward = async () => {
+    if (!editForm.name || !editForm.points) {
+      alert('Nome e punti sono obbligatori!')
+      return
+    }
+    const id = editingReward.id || editingReward._id
+    try {
+      const response = await axios.put(`${API_URL}/rewards/${id}`, {
+        ...editForm,
+        points: parseInt(editForm.points)
+      })
+      setRewards(rewards.map(r => (r.id === id || r._id === id) ? response.data : r))
+      closeEditModal()
+      alert('✅ Reward aggiornato!')
+    } catch (error) {
+      alert('❌ Errore nell\'aggiornamento')
+    }
+  }
+
   const handleLogout = () => {
     setUser(null)
     setCurrentPage('login')
@@ -209,12 +247,88 @@ function App() {
     color: '#fff', fontSize: '16px', outline: 'none', boxSizing: 'border-box'
   }
 
+  const modalInputStyle = {
+    width: '100%', padding: '10px 14px', marginBottom: '12px',
+    borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)', background: '#0a0a0a',
+    color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box'
+  }
+
   return (
     <div className="app">
       {upgradeMessage && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999, background: upgradeMessage.includes('🎉') ? '#53FC58' : '#ff4444', color: upgradeMessage.includes('🎉') ? '#000' : '#fff', padding: '14px', textAlign: 'center', fontWeight: 700, fontSize: '16px' }}>
           {upgradeMessage}
           <button onClick={() => setUpgradeMessage('')} style={{ marginLeft: '16px', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '16px' }}>✕</button>
+        </div>
+      )}
+
+      {/* MODAL MODIFICA REWARD */}
+      {editingReward && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div style={{ background: '#111', border: '1px solid rgba(83,252,88,0.3)', borderRadius: '16px', padding: '32px', width: '100%', maxWidth: '480px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+              <h2 style={{ color: '#fff', margin: 0, fontSize: '20px' }}>✏️ Modifica Reward</h2>
+              <button onClick={closeEditModal} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', fontSize: '20px', cursor: 'pointer', lineHeight: 1 }}>✕</button>
+            </div>
+
+            <label style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Nome Reward</label>
+            <input
+              type="text"
+              value={editForm.name}
+              onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+              placeholder="Es. Shoutout in live"
+              style={modalInputStyle}
+            />
+
+            <label style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Descrizione</label>
+            <input
+              type="text"
+              value={editForm.description}
+              onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+              placeholder="Es. Ti menziono durante lo stream"
+              style={modalInputStyle}
+            />
+
+            <label style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Punti Richiesti</label>
+            <input
+              type="number"
+              value={editForm.points}
+              onChange={(e) => setEditForm({ ...editForm, points: e.target.value })}
+              placeholder="Es. 500"
+              style={modalInputStyle}
+            />
+
+            <label style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '8px' }}>Stato</label>
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '24px' }}>
+              <button
+                onClick={() => setEditForm({ ...editForm, active: true })}
+                style={{ flex: 1, padding: '10px', borderRadius: '8px', border: editForm.active ? '2px solid #53FC58' : '1px solid rgba(255,255,255,0.1)', background: editForm.active ? 'rgba(83,252,88,0.1)' : 'transparent', color: editForm.active ? '#53FC58' : 'rgba(255,255,255,0.5)', fontWeight: 700, cursor: 'pointer', fontSize: '14px' }}
+              >
+                ✅ Attivo
+              </button>
+              <button
+                onClick={() => setEditForm({ ...editForm, active: false })}
+                style={{ flex: 1, padding: '10px', borderRadius: '8px', border: !editForm.active ? '2px solid #ff9800' : '1px solid rgba(255,255,255,0.1)', background: !editForm.active ? 'rgba(255,152,0,0.1)' : 'transparent', color: !editForm.active ? '#ff9800' : 'rgba(255,255,255,0.5)', fontWeight: 700, cursor: 'pointer', fontSize: '14px' }}
+              >
+                ⏸️ Disattivo
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                onClick={closeEditModal}
+                style={{ flex: 1, padding: '12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: 'rgba(255,255,255,0.6)', fontWeight: 700, cursor: 'pointer', fontSize: '14px' }}
+              >
+                Annulla
+              </button>
+              <button
+                onClick={saveEditReward}
+                style={{ flex: 2, padding: '12px', borderRadius: '8px', border: 'none', background: '#53FC58', color: '#000', fontWeight: 700, cursor: 'pointer', fontSize: '14px' }}
+              >
+                💾 Salva Modifiche
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -364,6 +478,7 @@ function App() {
             </div>
           </div>
 
+          {/* GESTIONE REWARDS */}
           <div className="rewards-section">
             <div className="section-header">
               <h2>🎁 Gestione Rewards</h2>
@@ -384,7 +499,15 @@ function App() {
                   <p className="reward-description">{reward.description}</p>
                   <div className="reward-footer">
                     <div className="reward-points"><span className="points-value">{reward.points}</span><span className="points-label">punti</span></div>
-                    <button className="btn-delete" onClick={() => deleteReward(reward.id || reward._id)}>🗑️ Elimina</button>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        onClick={() => openEditModal(reward)}
+                        style={{ background: 'rgba(83,252,88,0.1)', color: '#53FC58', border: '1px solid rgba(83,252,88,0.3)', borderRadius: '8px', padding: '8px 14px', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                      >
+                        ✏️ Modifica
+                      </button>
+                      <button className="btn-delete" onClick={() => deleteReward(reward.id || reward._id)}>🗑️ Elimina</button>
+                    </div>
                   </div>
                 </div>
               ))}
