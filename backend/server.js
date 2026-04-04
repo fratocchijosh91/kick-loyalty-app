@@ -1,9 +1,10 @@
-// v4 - Kick OAuth reale
+// v5 - Kick OAuth 2.1 con PKCE
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const mongoose = require('mongoose');
 const axios = require('axios');
+const crypto = require('crypto');
 
 dotenv.config();
 
@@ -62,44 +63,74 @@ let mockRewards = [
   { id: '3', name: 'Custom Emote', description: 'Emote personalizzata', points: 1000, type: 'emote', active: true }
 ];
 
+// Sessioni OAuth temporanee in memoria
+global.oauthSessions = {};
+
 // ==================== ROUTES ====================
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Server is running!' });
 });
 
-// STEP 1 - Genera URL OAuth Kick
+// STEP 1 - Genera URL OAuth Kick con PKCE
 app.get('/api/auth/kick/url', (req, res) => {
+  const state = crypto.randomBytes(16).toString('hex');
+  const codeVerifier = crypto.randomBytes(32).toString('base64url');
+  const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+
+  // Salva codeVerifier associato allo state
+  global.oauthSessions[state] = codeVerifier;
+
+  // Pulisci sessioni vecchie (> 10 minuti)
+  setTimeout(() => { delete global.oauthSessions[state]; }, 10 * 60 * 1000);
+
   const scopes = ['user:read', 'channel:read'].join(' ');
-  const authUrl = `https://kick.com/oauth2/authorize?` +
-    `client_id=${KICK_CLIENT_ID}` +
+  const authUrl = `https://id.kick.com/oauth/authorize?` +
+    `response_type=code` +
+    `&client_id=${KICK_CLIENT_ID}` +
     `&redirect_uri=${encodeURIComponent(KICK_REDIRECT_URI)}` +
-    `&response_type=code` +
-    `&scope=${encodeURIComponent(scopes)}`;
-  res.json({ url: authUrl });
+    `&scope=${encodeURIComponent(scopes)}` +
+    `&code_challenge=${codeChallenge}` +
+    `&code_challenge_method=S256` +
+    `&state=${state}`;
+
+  res.json({ url: authUrl, state });
 });
 
 // STEP 2 - Callback OAuth
 app.post('/api/auth/kick/callback', async (req, res) => {
-  const { code } = req.body;
+  const { code, state } = req.body;
   if (!code) return res.status(400).json({ error: 'Code mancante' });
 
+  // Recupera codeVerifier dallo state
+  const codeVerifier = global.oauthSessions[state];
+  if (!codeVerifier) {
+    console.warn('codeVerifier non trovato per state:', state);
+  }
+
   try {
-    const tokenResponse = await axios.post('https://kick.com/oauth2/token', {
-      grant_type: 'authorization_code',
-      client_id: KICK_CLIENT_ID,
-      client_secret: KICK_CLIENT_SECRET,
-      redirect_uri: KICK_REDIRECT_URI,
-      code: code
-    }, { headers: { 'Content-Type': 'application/json' } });
+    const params = new URLSearchParams();
+    params.append('grant_type', 'authorization_code');
+    params.append('client_id', KICK_CLIENT_ID);
+    params.append('client_secret', KICK_CLIENT_SECRET);
+    params.append('redirect_uri', KICK_REDIRECT_URI);
+    params.append('code', code);
+    if (codeVerifier) params.append('code_verifier', codeVerifier);
+
+    const tokenResponse = await axios.post('https://id.kick.com/oauth/token', params, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
 
     const { access_token, refresh_token } = tokenResponse.data;
 
-    const userResponse = await axios.get('https://kick.com/api/v1/user', {
+    // Pulisci sessione
+    if (state) delete global.oauthSessions[state];
+
+    const userResponse = await axios.get('https://api.kick.com/public/v1/users', {
       headers: { 'Authorization': `Bearer ${access_token}` }
     });
 
-    const kickUser = userResponse.data;
+    const kickUser = userResponse.data.data[0];
 
     let user;
     if (mongoose.connection.readyState === 1) {
@@ -107,17 +138,21 @@ app.post('/api/auth/kick/callback', async (req, res) => {
         { kickUsername: kickUser.username.toLowerCase() },
         {
           kickUsername: kickUser.username.toLowerCase(),
-          kickDisplayName: kickUser.username,
-          kickAvatarUrl: kickUser.profile_pic || null,
-          kickChannelId: kickUser.id?.toString() || null,
+          kickDisplayName: kickUser.name || kickUser.username,
+          kickAvatarUrl: kickUser.profile_picture || null,
+          kickChannelId: kickUser.user_id?.toString() || null,
           kickAccessToken: access_token,
-          kickRefreshToken: refresh_token,
+          kickRefreshToken: refresh_token || null,
           lastLogin: new Date()
         },
         { upsert: true, new: true }
       );
     } else {
-      user = { _id: 'mock_' + kickUser.username, kickUsername: kickUser.username.toLowerCase(), kickDisplayName: kickUser.username };
+      user = {
+        _id: 'mock_' + kickUser.username,
+        kickUsername: kickUser.username.toLowerCase(),
+        kickDisplayName: kickUser.name || kickUser.username
+      };
     }
 
     res.json({
@@ -230,3 +265,4 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`📋 API disponibili su http://localhost:${PORT}/api/`);
 });
+

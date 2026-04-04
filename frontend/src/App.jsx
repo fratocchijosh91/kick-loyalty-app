@@ -1,3 +1,4 @@
+
 import { useState, useEffect } from 'react'
 import axios from 'axios'
 
@@ -15,9 +16,10 @@ function App() {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search)
     const code = urlParams.get('code')
+    const state = urlParams.get('state')
     if (code) {
       setLoading(true)
-      axios.post(`${API_URL}/auth/kick/callback`, { code })
+      axios.post(`${API_URL}/auth/kick/callback`, { code, state })
         .then(response => {
           setUser(response.data.user)
           setCurrentPage('dashboard')
@@ -26,7 +28,7 @@ function App() {
         })
         .catch(error => {
           console.error('OAuth callback error:', error)
-          alert('Errore login OAuth')
+          alert('Errore login OAuth: ' + (error.response?.data?.details?.message || error.message))
         })
         .finally(() => setLoading(false))
     }
