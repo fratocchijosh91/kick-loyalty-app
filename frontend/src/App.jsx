@@ -13,6 +13,7 @@ function App() {
   const [upgradeLoading, setUpgradeLoading] = useState(false)
   const [upgradeMessage, setUpgradeMessage] = useState('')
   const [widgetCopied, setWidgetCopied] = useState(false)
+  const [analytics, setAnalytics] = useState(null)
 
   // Gestisce callback OAuth Kick e risultato upgrade
   useEffect(() => {
@@ -94,12 +95,14 @@ function App() {
   // Load data
   const loadData = async () => {
     try {
-      const [rewardsRes, statsRes] = await Promise.all([
+      const [rewardsRes, statsRes, analyticsRes] = await Promise.all([
         axios.get(`${API_URL}/rewards`),
-        axios.get(`${API_URL}/stats`)
+        axios.get(`${API_URL}/stats`),
+        axios.get(`${API_URL}/analytics`)
       ])
       setRewards(rewardsRes.data)
       setStats(statsRes.data)
+      setAnalytics(analyticsRes.data)
     } catch (error) {
       console.error('Error loading data:', error)
     }
@@ -341,23 +344,61 @@ function App() {
           <Navbar />
           <div className="analytics-page">
             <h2>📈 Analytics Dashboard</h2>
-            <p>Statistiche e metriche del tuo sistema loyalty</p>
+            <p>Statistiche e metriche reali del tuo sistema loyalty</p>
             <div className="analytics-grid">
               <div className="analytics-card">
-                <h3>📊 Distribuzione Punti</h3>
+                <h3>📊 Nuovi Utenti per Mese</h3>
                 <div className="chart-placeholder">
-                  <p>Gen: 3,400 punti</p>
-                  <p>Feb: 4,200 punti</p>
-                  <p>Mar: 5,100 punti</p>
-                  <p>Apr: 6,800 punti</p>
+                  {analytics?.pointsByMonth?.length > 0 ? (
+                    analytics.pointsByMonth.map((m, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                        <span style={{ color: 'rgba(255,255,255,0.6)' }}>{m.month}</span>
+                        <span style={{ color: '#53FC58', fontWeight: 700 }}>{m.points} pt</span>
+                      </div>
+                    ))
+                  ) : (
+                    <p style={{ color: 'rgba(255,255,255,0.4)' }}>Nessun dato disponibile</p>
+                  )}
                 </div>
               </div>
               <div className="analytics-card">
                 <h3>🏆 Top Rewards</h3>
                 <div className="top-rewards">
-                  <div className="reward-stat"><span>Welcome Bonus</span><strong>245 volte</strong></div>
-                  <div className="reward-stat"><span>Shoutout</span><strong>156 volte</strong></div>
-                  <div className="reward-stat"><span>Custom Emote</span><strong>89 volte</strong></div>
+                  {analytics?.topRewards?.length > 0 ? (
+                    analytics.topRewards.map((r, i) => (
+                      <div key={i} className="reward-stat">
+                        <span>{r.name}</span>
+                        <strong style={{ color: '#53FC58' }}>{r.count} volte</strong>
+                      </div>
+                    ))
+                  ) : rewards.length > 0 ? (
+                    rewards.slice(0, 5).map((r, i) => (
+                      <div key={i} className="reward-stat">
+                        <span>{r.name}</span>
+                        <strong style={{ color: '#53FC58' }}>{r.points} pt</strong>
+                      </div>
+                    ))
+                  ) : (
+                    <p style={{ color: 'rgba(255,255,255,0.4)' }}>Nessun reward ancora</p>
+                  )}
+                </div>
+              </div>
+              <div className="analytics-card">
+                <h3>👥 Utenti Totali</h3>
+                <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                  <div style={{ fontSize: '48px', fontWeight: 700, color: '#53FC58' }}>
+                    {stats?.totalViewers || 0}
+                  </div>
+                  <div style={{ color: 'rgba(255,255,255,0.5)', marginTop: '8px' }}>streamer registrati</div>
+                </div>
+              </div>
+              <div className="analytics-card">
+                <h3>🎁 Rewards Attivi</h3>
+                <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                  <div style={{ fontSize: '48px', fontWeight: 700, color: '#53FC58' }}>
+                    {rewards.filter(r => r.active).length}
+                  </div>
+                  <div style={{ color: 'rgba(255,255,255,0.5)', marginTop: '8px' }}>rewards configurati</div>
                 </div>
               </div>
             </div>
