@@ -343,15 +343,25 @@ function App() {
             <div className="login-box">
               <h2>Accedi alla Dashboard</h2>
               <p className="login-description">Gestisci rewards, punti e fidelizza la tua community</p>
-              <input type="text" placeholder="Il tuo username Kick... (opzionale)" value={kickUsername} onChange={(e) => setKickUsername(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleLogin()} style={inputStyle} />
-              <button className="btn-kick-login" onClick={handleLogin} disabled={loading}>
-                {loading ? '⏳ Caricamento...' : kickUsername ? '🚀 Entra con username' : '🟢 Login con Kick'}
-              </button>
-              <div style={{ marginTop: '16px', textAlign: 'center' }}>
-                <button onClick={() => setCurrentPage('viewer')} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.6)', borderRadius: '8px', padding: '10px 20px', cursor: 'pointer', fontSize: '14px' }}>
-                  👀 Sei uno spettatore? Clicca qui
-                </button>
-              </div>
+ <button className="btn-kick-login" onClick={handleLogin} disabled={loading}>
+  {loading ? '⏳ Caricamento...' : '🟢 Login con Kick'}
+</button>
+<div style={{ margin: '16px 0', display: 'flex', alignItems: 'center', gap: '10px' }}>
+  <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
+  <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>oppure accedi manualmente</span>
+  <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
+</div>
+<input type="text" placeholder="Inserisci username Kick..." value={kickUsername} onChange={(e) => setKickUsername(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleLogin()} style={{ ...inputStyle, background: '#111', border: '1px solid rgba(255,255,255,0.1)', fontSize: '14px', color: 'rgba(255,255,255,0.6)' }} />
+{kickUsername && (
+  <button onClick={handleLogin} disabled={loading} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: 'rgba(255,255,255,0.6)', fontWeight: 600, cursor: 'pointer', fontSize: '14px', marginBottom: '12px' }}>
+    🚀 Entra con username
+  </button>
+)}
+<div style={{ marginTop: '8px', textAlign: 'center' }}>
+  <button onClick={() => setCurrentPage('viewer')} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.6)', borderRadius: '8px', padding: '10px 20px', cursor: 'pointer', fontSize: '14px' }}>
+    👀 Sei uno spettatore? Clicca qui
+  </button>
+</div>
               <div className="login-features">
                 <div className="feature"><span className="feature-icon">⭐</span><span>Rewards Personalizzati</span></div>
                 <div className="feature"><span className="feature-icon">📊</span><span>Analytics in Real-time</span></div>
