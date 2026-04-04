@@ -115,6 +115,18 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 
+// Schema ViewerPoints - punti degli spettatori per ogni streamer
+const viewerPointsSchema = new mongoose.Schema({
+  viewerUsername: { type: String, required: true },
+  streamerUsername: { type: String, required: true },
+  points: { type: Number, default: 0 },
+  totalEarned: { type: Number, default: 0 },
+  lastSeen: { type: Date, default: Date.now },
+  createdAt: { type: Date, default: Date.now }
+});
+viewerPointsSchema.index({ viewerUsername: 1, streamerUsername: 1 }, { unique: true });
+const ViewerPoints = mongoose.models.ViewerPoints || mongoose.model('ViewerPoints', viewerPointsSchema);
+
 // Schema Reward
 const rewardSchema = new mongoose.Schema({
   name: String,
@@ -371,16 +383,34 @@ app.post('/api/rewards/:id/redeem', async (req, res) => {
   try {
     let reward;
     if (mongoose.connection.readyState === 1) {
-      reward = await Reward.findByIdAndUpdate(
-        req.params.id,
-        { $inc: { redeemedCount: 1 } },
-        { new: true }
-      );
+      reward = await Reward.findById(req.params.id);
     } else {
       reward = mockRewards.find(r => r.id === req.params.id);
     }
 
     if (!reward) return res.status(404).json({ error: 'Reward non trovato' });
+
+    // Controlla punti spettatore se richiesti
+    if (reward.points > 0 && viewerUsername && streamerUsername && mongoose.connection.readyState === 1) {
+      const vp = await ViewerPoints.findOne({
+        viewerUsername: viewerUsername.toLowerCase(),
+        streamerUsername: streamerUsername.toLowerCase()
+      });
+      const currentPoints = vp?.points || 0;
+      if (currentPoints < reward.points) {
+        return res.status(400).json({ error: `Punti insufficienti! Hai ${currentPoints} pt, servono ${reward.points} pt` });
+      }
+      // Scala i punti
+      await ViewerPoints.findOneAndUpdate(
+        { viewerUsername: viewerUsername.toLowerCase(), streamerUsername: streamerUsername.toLowerCase() },
+        { $inc: { points: -reward.points } }
+      );
+    }
+
+    // Incrementa contatore riscatti
+    if (mongoose.connection.readyState === 1) {
+      reward = await Reward.findByIdAndUpdate(req.params.id, { $inc: { redeemedCount: 1 } }, { new: true });
+    }
 
     // Invia notifica real-time allo streamer
     if (io && streamerUsername) {
@@ -453,6 +483,112 @@ app.get('/api/analytics', async (req, res) => {
       });
     } else {
       res.json({ topRewards: [], pointsByMonth: [], totalRewards: 0, recentUsers: 0 });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== KICK WEBHOOK ====================
+
+// Kick manda eventi qui quando qualcuno guarda, segue, si iscrive
+app.post('/api/kick/webhook', express.json(), async (req, res) => {
+  try {
+    const event = req.body;
+    console.log('📥 Kick Webhook ricevuto:', event?.type || 'unknown');
+
+    // Evento: spettatore guarda la live (chat message = è online)
+    if (event?.type === 'chat_message' || event?.type === 'stream.chat.message') {
+      const viewerUsername = event?.data?.sender?.username || event?.data?.chatter?.username;
+      const streamerUsername = event?.data?.broadcaster?.username || event?.data?.channel?.slug;
+      
+      if (viewerUsername && streamerUsername && mongoose.connection.readyState === 1) {
+        // Assegna 1 punto per messaggio in chat (max 10 punti ogni 10 minuti)
+        await ViewerPoints.findOneAndUpdate(
+          { viewerUsername: viewerUsername.toLowerCase(), streamerUsername: streamerUsername.toLowerCase() },
+          { 
+            $inc: { points: 1, totalEarned: 1 },
+            lastSeen: new Date()
+          },
+          { upsert: true, new: true }
+        );
+        console.log(`⭐ +1 punto a ${viewerUsername} per ${streamerUsername}`);
+      }
+    }
+
+    // Evento: nuovo follower
+    if (event?.type === 'channel.follow' || event?.type === 'follow') {
+      const viewerUsername = event?.data?.follower?.username;
+      const streamerUsername = event?.data?.channel?.slug || event?.data?.broadcaster?.username;
+      
+      if (viewerUsername && streamerUsername && mongoose.connection.readyState === 1) {
+        await ViewerPoints.findOneAndUpdate(
+          { viewerUsername: viewerUsername.toLowerCase(), streamerUsername: streamerUsername.toLowerCase() },
+          { $inc: { points: 50, totalEarned: 50 }, lastSeen: new Date() },
+          { upsert: true, new: true }
+        );
+        console.log(`🎉 +50 punti a ${viewerUsername} per follow a ${streamerUsername}`);
+      }
+    }
+
+    res.json({ received: true });
+  } catch (error) {
+    console.error('Kick webhook error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== VIEWER POINTS ====================
+
+// Ottieni punti di uno spettatore per uno streamer
+app.get('/api/viewer-points/:viewerUsername/:streamerUsername', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState === 1) {
+      const vp = await ViewerPoints.findOne({
+        viewerUsername: req.params.viewerUsername.toLowerCase(),
+        streamerUsername: req.params.streamerUsername.toLowerCase()
+      });
+      res.json({ points: vp?.points || 0, totalEarned: vp?.totalEarned || 0 });
+    } else {
+      res.json({ points: 0, totalEarned: 0 });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Assegna punti manualmente (streamer lo fa dalla dashboard)
+app.post('/api/viewer-points/assign', async (req, res) => {
+  const { viewerUsername, streamerUsername, points } = req.body;
+  if (!viewerUsername || !streamerUsername || !points) {
+    return res.status(400).json({ error: 'Dati mancanti' });
+  }
+  try {
+    if (mongoose.connection.readyState === 1) {
+      const vp = await ViewerPoints.findOneAndUpdate(
+        { viewerUsername: viewerUsername.toLowerCase(), streamerUsername: streamerUsername.toLowerCase() },
+        { $inc: { points: parseInt(points), totalEarned: parseInt(points) }, lastSeen: new Date() },
+        { upsert: true, new: true }
+      );
+      res.json({ success: true, points: vp.points });
+    } else {
+      res.json({ success: true, points: parseInt(points) });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Leaderboard spettatori per uno streamer
+app.get('/api/viewer-points/leaderboard/:streamerUsername', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState === 1) {
+      const leaderboard = await ViewerPoints.find({
+        streamerUsername: req.params.streamerUsername.toLowerCase()
+      }).sort({ points: -1 }).limit(10);
+      res.json(leaderboard);
+    } else {
+      res.json([]);
     }
   } catch (error) {
     res.status(500).json({ error: error.message });
