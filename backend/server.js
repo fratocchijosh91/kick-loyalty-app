@@ -595,6 +595,36 @@ app.get('/api/viewer-points/leaderboard/:streamerUsername', async (req, res) => 
   }
 });
 
+// Proxy per Anthropic AI (evita CORS dal browser)
+app.post('/api/ai/chat', async (req, res) => {
+  try {
+    const { messages, system } = req.body;
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: 'messages array required' });
+    }
+    const anthropicKey = process.env.ANTHROPIC_API_KEY;
+    if (!anthropicKey) {
+      return res.status(500).json({ error: 'Anthropic API key non configurata sul server' });
+    }
+    const response = await axios.post('https://api.anthropic.com/v1/messages', {
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      system: system || 'Sei l\'assistente AI di KickLoyalty, piattaforma rewards per streamer su Kick. Aiuta gli streamer a crescere, suggerisci idee per rewards, strategie di engagement e come usare al meglio il sistema. Rispondi in italiano, in modo conciso e pratico.',
+      messages
+    }, {
+      headers: {
+        'x-api-key': anthropicKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json'
+      }
+    });
+    res.json(response.data);
+  } catch (error) {
+    console.error('AI proxy error:', error.response?.data || error.message);
+    res.status(500).json({ error: error.response?.data?.error?.message || error.message });
+  }
+});
+
 connectDB();
 server.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
