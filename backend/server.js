@@ -602,7 +602,7 @@ app.post('/api/ai/chat', async (req, res) => {
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'messages array required' });
     }
-    const anthropicKey = process.env.ANTHROPIC_API_KEY;
+    const anthropicKey = (process.env.ANTHROPIC_API_KEY || '').trim().replace(/^"|"$/g, '').replace(/^'|'$/g, '');
     if (!anthropicKey) {
       return res.status(500).json({ error: 'Anthropic API key non configurata sul server' });
     }
