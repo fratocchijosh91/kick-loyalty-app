@@ -4,17 +4,13 @@ import axios from "axios";
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 async function askAI(messages) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch(`${API_URL}/ai/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      system: `Sei l'assistente AI di KickLoyalty, piattaforma rewards per streamer su Kick. Aiuta gli streamer a crescere, suggerisci idee per rewards, strategie di engagement e come usare al meglio il sistema. Rispondi in italiano, in modo conciso e pratico.`,
-      messages,
-    }),
+    body: JSON.stringify({ messages }),
   });
   const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Errore server");
   return data.content?.map(b => b.text || "").join("") || "Errore nella risposta.";
 }
 
