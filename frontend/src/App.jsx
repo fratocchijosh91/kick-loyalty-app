@@ -246,6 +246,8 @@ export default function App() {
   const [copied, setCopied] = useState({});
   const [barsOn, setBarsOn] = useState(false);
   const [upgradeLoading, setUpgradeLoading] = useState(false);
+  const [onboarding, setOnboarding] = useState(false);
+  const [onbStep, setOnbStep] = useState(0);
   // Viewer
   const [vU, setVU] = useState("");
   const [vS, setVS] = useState("");
@@ -500,14 +502,28 @@ export default function App() {
                     <div style={{fontSize:13,color:"var(--muted)",marginTop:8}}>
                       Ciao <b style={{color:"var(--txt)"}}>{vU}</b> · Stream di <b style={{color:"var(--txt)"}}>{vS}</b>
                     </div>
+                    {vRewards.filter(r=>r.active).length > 0 && (() => {
+                      const next = vRewards.filter(r=>r.active && r.points > vPts).sort((a,b)=>a.points-b.points)[0];
+                      if (!next) return <div style={{marginTop:12,fontSize:13,color:"var(--green)"}}>🏆 Hai abbastanza punti per tutti i rewards!</div>;
+                      const pct = Math.min(100, Math.round((vPts / next.points) * 100));
+                      return (
+                        <div style={{marginTop:14}}>
+                          <div style={{fontSize:12,color:"var(--muted)",marginBottom:6}}>Prossimo reward: <b style={{color:"var(--txt)"}}>{next.name}</b> ({next.points} pt)</div>
+                          <div style={{background:"var(--s2)",borderRadius:99,height:8,overflow:"hidden"}}>
+                            <div style={{width:`${pct}%`,height:"100%",background:"var(--green)",borderRadius:99,transition:"width 0.6s ease"}}/>
+                          </div>
+                          <div style={{fontSize:11,color:"var(--muted)",marginTop:4}}>{pct}% · mancano {(next.points-vPts).toLocaleString()} pt</div>
+                        </div>
+                      );
+                    })()}
                   </div>
                   {rdMsg && <div className={`rd-msg ${rdMsg.ok?"ok":"err"}`}>{rdMsg.t}</div>}
                   <div className="sec-title">Rewards Disponibili</div>
                   <div className="vr-list">
-                    {vRewards.filter(r=>r.active).map(r=>(
-                      <div className="vr-row" key={r.id||r._id}>
+                    {vRewards.filter(r=>r.active).sort((a,b)=>a.points-b.points).map(r=>(
+                      <div className="vr-row" key={r.id||r._id} style={{opacity: vPts>=r.points ? 1 : 0.6}}>
                         <div className="vr-info">
-                          <div className="vr-rname">{r.name}</div>
+                          <div className="vr-rname">{r.name} {vPts>=r.points && <span style={{color:"var(--green)",fontSize:11}}>✓ Disponibile</span>}</div>
                           <div className="vr-desc">{r.description}</div>
                         </div>
                         <button className={`btn-rd ${vPts>=r.points?"can":"no"}`} onClick={()=>redeem(r)}>
@@ -748,6 +764,78 @@ export default function App() {
 
               </div>
             </div>
+
+            {/* ONBOARDING MODAL */}
+            {onboarding && (() => {
+              const steps = [
+                {
+                  icon: "🎉",
+                  title: "Benvenuto su Kick Loyalty!",
+                  desc: "In pochi passi configureremo il tuo sistema di rewards. I tuoi spettatori guadagneranno punti guardando la tua live!",
+                  action: null
+                },
+                {
+                  icon: "🎁",
+                  title: "Crea la tua prima Reward",
+                  desc: "Vai su Dashboard → crea una reward che i tuoi spettatori possono riscattare con i punti. Esempio: Shoutout a 500 pt.",
+                  action: () => { setTab("dashboard"); setModal(true); }
+                },
+                {
+                  icon: "📡",
+                  title: "Collega il Webhook Kick",
+                  desc: (
+                    <span>
+                      Per accumulare punti automaticamente, vai su <b>Kick Developer Portal</b> e aggiungi questo URL come webhook:<br/><br/>
+                      <code style={{background:"var(--s2)",padding:"4px 8px",borderRadius:6,fontSize:12,wordBreak:"break-all"}}>
+                        {`${API_URL.replace('/api','')}/api/kick/webhook`}
+                      </code><br/><br/>
+                      Ogni messaggio in chat = +1 pt · Follow = +50 pt · Sub = +200 pt
+                    </span>
+                  ),
+                  action: null
+                },
+                {
+                  icon: "📢",
+                  title: "Condividi con la tua community",
+                  desc: "Incolla il link spettatori nella descrizione del tuo canale Kick. I tuoi fan potranno vedere i loro punti e riscattare rewards!",
+                  action: null
+                }
+              ];
+              const step = steps[onbStep];
+              return (
+                <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+                  <div style={{background:"var(--s1)",border:"1px solid var(--border)",borderRadius:20,padding:32,maxWidth:480,width:"100%",animation:"fadeUp 0.3s ease"}}>
+                    <div style={{textAlign:"center",marginBottom:24}}>
+                      <div style={{fontSize:48,marginBottom:12}}>{step.icon}</div>
+                      <h2 style={{margin:"0 0 8px",fontSize:20}}>{step.title}</h2>
+                      <div style={{color:"var(--muted)",fontSize:14,lineHeight:1.6}}>{step.desc}</div>
+                    </div>
+                    {/* Progress dots */}
+                    <div style={{display:"flex",justifyContent:"center",gap:6,marginBottom:24}}>
+                      {steps.map((_,i)=>(
+                        <div key={i} style={{width:8,height:8,borderRadius:99,background:i===onbStep?"var(--green)":"var(--border)",transition:"background 0.2s"}}/>
+                      ))}
+                    </div>
+                    <div style={{display:"flex",gap:10}}>
+                      {onbStep > 0 && (
+                        <button className="btn-ghost" style={{flex:1}} onClick={()=>setOnbStep(s=>s-1)}>← Indietro</button>
+                      )}
+                      {step.action && (
+                        <button className="btn-ghost" style={{flex:1}} onClick={()=>{step.action(); setOnboarding(false); localStorage.setItem(`onboarded_${user?.username}`,"1");}}>
+                          Fallo ora
+                        </button>
+                      )}
+                      {onbStep < steps.length - 1 ? (
+                        <button className="btn-g" style={{flex:2}} onClick={()=>setOnbStep(s=>s+1)}>Avanti →</button>
+                      ) : (
+                        <button className="btn-g" style={{flex:2}} onClick={()=>{setOnboarding(false); localStorage.setItem(`onboarded_${user?.username}`,"1");}}>🚀 Inizia!</button>
+                      )}
+                    </div>
+                    <button onClick={()=>{setOnboarding(false); localStorage.setItem(`onboarded_${user?.username}`,"1");}} style={{display:"block",margin:"16px auto 0",background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:12}}>Salta il tutorial</button>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* AI FAB */}
             <button className={`ai-fab ${aiOpen?"open":""}`} onClick={()=>setAiOpen(o=>!o)}>
