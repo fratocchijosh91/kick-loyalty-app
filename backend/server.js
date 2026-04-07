@@ -8,6 +8,9 @@ const crypto = require('crypto');
 const Stripe = require('stripe');
 const http = require('http');
 const { Server } = require('socket.io');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
+const { body, param, validationResult } = require('express-validator');
 
 dotenv.config();
 
@@ -84,8 +87,54 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
 });
 
 // Middleware
-app.use(cors({ origin: '*', credentials: false }));
-app.use(express.json());
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(cors({ origin: process.env.FRONTEND_URL || '*', credentials: false }));
+app.use(express.json({ limit: '10kb' }));
+
+// Rate limiting globale
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minuti
+  max: 200,
+  message: { error: 'Troppe richieste, riprova tra 15 minuti.' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+app.use('/api/', globalLimiter);
+
+// Rate limiting più stretto per auth
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: 'Troppi tentativi di login, riprova tra 15 minuti.' }
+});
+
+// Rate limiting per AI
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minuto
+  max: 10,
+  message: { error: 'Troppe richieste AI, riprova tra un minuto.' }
+});
+
+// Middleware JWT auth
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Token mancante' });
+  try {
+    const decoded = require('jsonwebtoken').verify(token, process.env.JWT_SECRET || 'fallback_secret_change_me');
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return res.status(403).json({ error: 'Token non valido o scaduto' });
+  }
+};
+
+// Helper validazione
+const validate = (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  next();
+};
 
 // MongoDB Connection
 const connectDB = async () => {
@@ -155,7 +204,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // STEP 1 - Genera URL OAuth Kick con PKCE
-app.get('/api/auth/kick/url', (req, res) => {
+app.get('/api/auth/kick/url', authLimiter, (req, res) => {
   const state = crypto.randomBytes(16).toString('hex');
   const codeVerifier = crypto.randomBytes(32).toString('base64url');
   const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
@@ -177,7 +226,7 @@ app.get('/api/auth/kick/url', (req, res) => {
 });
 
 // STEP 2 - Callback OAuth
-app.post('/api/auth/kick/callback', async (req, res) => {
+app.post('/api/auth/kick/callback', authLimiter, async (req, res) => {
   const { code, state } = req.body;
   if (!code) return res.status(400).json({ error: 'Code mancante' });
 
@@ -229,8 +278,15 @@ app.post('/api/auth/kick/callback', async (req, res) => {
       user = { _id: 'mock_' + username, kickUsername: username.toLowerCase(), kickDisplayName: displayName, plan: 'free' };
     }
 
+    const jwt = require('jsonwebtoken');
+    const token = jwt.sign(
+      { id: user._id, username: user.kickUsername },
+      process.env.JWT_SECRET || 'fallback_secret_change_me',
+      { expiresIn: '7d' }
+    );
     res.json({
       success: true,
+      token,
       user: {
         id: user._id,
         username: user.kickUsername,
@@ -247,7 +303,9 @@ app.post('/api/auth/kick/callback', async (req, res) => {
 });
 
 // Login con username (fallback)
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, [
+  body('username').trim().isLength({ min: 1, max: 50 }).escape()
+], validate, async (req, res) => {
   const { username } = req.body;
   if (!username) return res.status(400).json({ error: 'Username richiesto' });
 
@@ -276,8 +334,15 @@ app.post('/api/auth/login', async (req, res) => {
       user = { _id: 'mock_' + username, kickUsername: username.toLowerCase(), kickDisplayName: username, plan: 'free' };
     }
 
+    const jwt = require('jsonwebtoken');
+    const token = jwt.sign(
+      { id: user._id, username: user.kickUsername },
+      process.env.JWT_SECRET || 'fallback_secret_change_me',
+      { expiresIn: '7d' }
+    );
     res.json({
       success: true,
+      token,
       user: {
         id: user._id,
         username: user.kickUsername,
@@ -336,7 +401,11 @@ app.get('/api/rewards', async (req, res) => {
   } catch (error) { res.json(mockRewards); }
 });
 
-app.post('/api/rewards', async (req, res) => {
+app.post('/api/rewards', authenticateToken, [
+  body('name').trim().isLength({ min: 1, max: 100 }).escape(),
+  body('points').isInt({ min: 0, max: 1000000 }),
+  body('description').optional().trim().isLength({ max: 500 }).escape()
+], validate, async (req, res) => {
   try {
     if (mongoose.connection.readyState === 1) {
       const reward = new Reward(req.body);
@@ -350,7 +419,7 @@ app.post('/api/rewards', async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-app.put('/api/rewards/:id', async (req, res) => {
+app.put('/api/rewards/:id', authenticateToken, async (req, res) => {
   try {
     if (mongoose.connection.readyState === 1) {
       const reward = await Reward.findByIdAndUpdate(req.params.id, req.body, { new: true });
@@ -363,7 +432,7 @@ app.put('/api/rewards/:id', async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-app.delete('/api/rewards/:id', async (req, res) => {
+app.delete('/api/rewards/:id', authenticateToken, async (req, res) => {
   try {
     if (mongoose.connection.readyState === 1) {
       await Reward.findByIdAndDelete(req.params.id);
@@ -376,7 +445,10 @@ app.delete('/api/rewards/:id', async (req, res) => {
 
 // ==================== REDEEM (con notifica real-time) ====================
 
-app.post('/api/rewards/:id/redeem', async (req, res) => {
+app.post('/api/rewards/:id/redeem', [
+  body('viewerUsername').optional().trim().isLength({ max: 50 }).escape(),
+  body('streamerUsername').optional().trim().isLength({ max: 50 }).escape()
+], validate, async (req, res) => {
   const { viewerUsername, streamerUsername } = req.body;
   const io = req.app.get('io');
 
@@ -596,7 +668,7 @@ app.get('/api/viewer-points/leaderboard/:streamerUsername', async (req, res) => 
 });
 
 // Proxy per Groq AI (gratuito)
-app.post('/api/ai/chat', async (req, res) => {
+app.post('/api/ai/chat', aiLimiter, async (req, res) => {
   try {
     const { messages } = req.body;
     if (!messages || !Array.isArray(messages)) {
