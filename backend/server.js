@@ -15,6 +15,10 @@ const { body, param, validationResult } = require('express-validator');
 dotenv.config();
 
 const app = express();
+
+// FIX: Trust proxy per Railway (risolve ERR_ERL_UNEXPECTED_X_FORWARDED_FOR)
+app.set('trust proxy', 1);
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] }
