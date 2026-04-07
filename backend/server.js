@@ -595,35 +595,39 @@ app.get('/api/viewer-points/leaderboard/:streamerUsername', async (req, res) => 
   }
 });
 
-// Proxy per Anthropic AI (evita CORS dal browser)
+// Proxy per Groq AI (gratuito)
 app.post('/api/ai/chat', async (req, res) => {
   try {
-    const { messages, system } = req.body;
+    const { messages } = req.body;
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'messages array required' });
     }
-    const anthropicKey = (process.env.ANTHROPIC_API_KEY || '').trim().replace(/^"|"$/g, '').replace(/^'|'$/g, '');
-    if (!anthropicKey) {
-      return res.status(500).json({ error: 'Anthropic API key non configurata sul server' });
+    const groqKey = (process.env.GROQ_API_KEY || '').trim();
+    if (!groqKey) {
+      return res.status(500).json({ error: 'Groq API key non configurata sul server' });
     }
-    const response = await axios.post('https://api.anthropic.com/v1/messages', {
-      model: 'claude-sonnet-4-20250514',
+    const groqMessages = [
+      { role: 'system', content: "Sei l'assistente AI di KickLoyalty, piattaforma rewards per streamer su Kick. Aiuta gli streamer a crescere, suggerisci idee per rewards, strategie di engagement e come usare al meglio il sistema. Rispondi in italiano, in modo conciso e pratico." },
+      ...messages
+    ];
+    const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
+      model: 'llama-3.1-8b-instant',
       max_tokens: 1000,
-      system: system || 'Sei l\'assistente AI di KickLoyalty, piattaforma rewards per streamer su Kick. Aiuta gli streamer a crescere, suggerisci idee per rewards, strategie di engagement e come usare al meglio il sistema. Rispondi in italiano, in modo conciso e pratico.',
-      messages
+      messages: groqMessages
     }, {
       headers: {
-        'x-api-key': anthropicKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json'
+        'Authorization': `Bearer ${groqKey}`,
+        'Content-Type': 'application/json'
       }
     });
-    res.json(response.data);
+    const text = response.data.choices?.[0]?.message?.content || 'Nessuna risposta.';
+    res.json({ content: [{ type: 'text', text }] });
   } catch (error) {
     console.error('AI proxy error:', error.response?.data || error.message);
     res.status(500).json({ error: error.response?.data?.error?.message || error.message });
   }
 });
+
 
 connectDB();
 server.listen(PORT, () => {
